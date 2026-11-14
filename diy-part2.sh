@@ -29,8 +29,6 @@ WIFI_5G_FALLBACK="${WIFI_5G_FALLBACK:-HE80}"
 
 # 可由 workflow 的 fw_author 输入项覆盖（经 env 注入）；本地单独跑时默认 qwe
 FW_AUTHOR="${FW_AUTHOR:-qwe}"
-FW_BUILD_TIME="${FW_BUILD_TIME:-}"
-FW_DESC_SUFFIX="${FW_DESC_SUFFIX:-}"
 
 echo "配置：2.4G country=$WIFI_24G_COUNTRY channel=$WIFI_24G_CHANNEL"
 echo "配置：5G country=$WIFI_5G_COUNTRY channel=$WIFI_5G_CHANNEL htmode=$WIFI_5G_HTMODE fallback=$WIFI_5G_FALLBACK"
@@ -53,17 +51,52 @@ fi
 # 2. uci-defaults：即使保留了旧配置也强制刷成中国时区
 # ---------------------------------------------------------
 mkdir -p files/etc/uci-defaults
+# B-M2: 原脚本只写时区，覆盖了仓库自带 99-timezone-cn 里的 NTP 服务器与
+#   dnsmasq 重绑定白名单。这里合并完整内容：时区 + NTP + rebind_domain 白名单。
 cat > files/etc/uci-defaults/99-timezone-cn <<'EOF'
 #!/bin/sh
+# 默认时区：Asia/Shanghai (CST-8)
+# NTP：阿里云主用，cn.pool 备用；dnsmasq 重绑定白名单放行 NTP 时间源与联网检测域
+
+# 时区
 uci -q batch <<'UCI'
 set system.@system[0].zonename='Asia/Shanghai'
 set system.@system[0].timezone='CST-8'
 commit system
 UCI
+
+# NTP 服务器（先清默认列表再写入）
+uci -q set system.ntp='timeserver'
+uci -q delete system.ntp.server
+uci -q add_list system.ntp.server='ntp.aliyun.com'
+uci -q add_list system.ntp.server='cn.pool.ntp.org'
+uci -q set system.ntp.enabled='1'
+uci -q commit system
+
+# dnsmasq 重绑定保护白名单：放行 NTP 时间源与系统联网检测域，避免被误判为 DNS rebind
+uci -q delete dhcp.@dnsmasq[0].rebind_domain
+uci -q add_list dhcp.@dnsmasq[0].rebind_domain='/ntp.org.cn/'
+uci -q add_list dhcp.@dnsmasq[0].rebind_domain='/aliyun.com/'
+uci -q add_list dhcp.@dnsmasq[0].rebind_domain='/tencent.com/'
+uci -q add_list dhcp.@dnsmasq[0].rebind_domain='/tencentyun.com/'
+uci -q add_list dhcp.@dnsmasq[0].rebind_domain='/time.edu.cn/'
+uci -q add_list dhcp.@dnsmasq[0].rebind_domain='/ntp.org/'
+uci -q add_list dhcp.@dnsmasq[0].rebind_domain='/ntsc.ac.cn/'
+uci -q add_list dhcp.@dnsmasq[0].rebind_domain='/apple.com/'
+uci -q add_list dhcp.@dnsmasq[0].rebind_domain='/windows.com/'
+uci -q add_list dhcp.@dnsmasq[0].rebind_domain='/cloudflare.com/'
+uci -q add_list dhcp.@dnsmasq[0].rebind_domain='/msftncsi.com/'
+uci -q add_list dhcp.@dnsmasq[0].rebind_domain='/msftconnecttest.com/'
+uci -q add_list dhcp.@dnsmasq[0].rebind_domain='/microsoft.com/'
+uci -q add_list dhcp.@dnsmasq[0].rebind_domain='/gstatic.com/'
+uci -q add_list dhcp.@dnsmasq[0].rebind_domain='/gnome.org/'
+uci -q add_list dhcp.@dnsmasq[0].rebind_domain='/mozilla.net/'
+uci -q commit dhcp
+
 exit 0
 EOF
 chmod +x files/etc/uci-defaults/99-timezone-cn
-echo "✅ uci-defaults 时区脚本已写入"
+echo "✅ uci-defaults 时区/NTP/重绑定白名单脚本已写入"
 
 # ---------------------------------------------------------
 # 3. 补上亚洲时区数据库包 + libffi（python3 _ctypes 需要）
@@ -74,11 +107,13 @@ echo "✅ uci-defaults 时区脚本已写入"
 # ---------------------------------------------------------
 if [ -f .config ]; then
   sed -i '/^CONFIG_PACKAGE_zoneinfo-asia=/d; /^# CONFIG_PACKAGE_zoneinfo-asia is not set/d' .config
-  echo "CONFIG_PACKAGE_zoneinfo-asia=y    # 亚洲时区数据库（中国时区需要）" >> .config
+  # 亚洲时区数据库（中国时区需要）
+  echo "CONFIG_PACKAGE_zoneinfo-asia=y" >> .config
   echo "✅ zoneinfo-asia 已加入 .config"
 
   sed -i '/^CONFIG_PACKAGE_libffi=/d; /^# CONFIG_PACKAGE_libffi is not set/d' .config
-  echo "CONFIG_PACKAGE_libffi=y           # python3 _ctypes 需要 ffi.h / libffi.pc" >> .config
+  # python3 _ctypes 需要 ffi.h / libffi.pc
+  echo "CONFIG_PACKAGE_libffi=y" >> .config
   echo "✅ libffi 已加入 .config"
 fi
 
@@ -148,33 +183,19 @@ for dev in \$(uci -q show wireless | sed -n 's/^wireless\.\([A-Za-z0-9_-]*\)=wif
 			log "\$dev：未检测到 160MHz 能力，回落为 \$ht"
 		fi
 		uci -q set wireless.\$dev.country="\$COUNTRY"
-		uci -q set wireless.\$dev.country_ie='1'
 		uci -q set wireless.\$dev.channel="\$CHANNEL"
 		uci -q set wireless.\$dev.htmode="\$ht"
 		log "\$dev (5G): country=\$COUNTRY channel=\$CHANNEL htmode=\$ht"
 	else
 		uci -q set wireless.\$dev.country="\$COUNTRY_24G"
-		uci -q set wireless.\$dev.country_ie='1'
 		uci -q set wireless.\$dev.channel="\$CHANNEL_24G"
 		log "\$dev (2.4G): country=\$COUNTRY_24G channel=\$CHANNEL_24G"
 	fi
 	changed=1
 done
 
-for iface in \$(uci -q show wireless | sed -n 's/^wireless\.\([A-Za-z0-9_-]*\)=wifi-iface\$/\1/p'); do
-	dev="\$(uci -q get wireless.\$iface.device 2>/dev/null)"
-	band="\$(uci -q get wireless.\$dev.band 2>/dev/null)"
-	hwmode="\$(uci -q get wireless.\$dev.hwmode 2>/dev/null)"
-	is5g=0
-	[ "\$band" = "5g" ] && is5g=1
-	[ -z "\$band" ] && [ "\$hwmode" = "11a" ] && is5g=1
-	if [ "\$is5g" = "1" ]; then
-		uci -q set wireless.\$iface.ssid="TP-LINK_6628_5G"
-	else
-		uci -q set wireless.\$iface.ssid="TP-LINK_6628"
-	fi
-	changed=1
-done
+# B-L11: 不再硬编码覆盖 SSID（保留首次开机生成或用户自定义的 SSID）；
+#   country_ie 不是标准 UCI 选项，已移除（国家码 country 已足够）。
 
 if [ "\$changed" = "1" ]; then
 	uci -q commit wireless
@@ -196,7 +217,8 @@ if [ -f .config ]; then
   fi
   if ! grep -q "^CONFIG_PACKAGE_iw=y" .config; then
     sed -i '/^CONFIG_PACKAGE_iw=/d; /^# CONFIG_PACKAGE_iw is not set/d' .config
-    echo "CONFIG_PACKAGE_iw=y                       # 无线命令行工具（160MHz 能力检测需要）" >> .config
+    # 无线命令行工具（160MHz 能力检测需要）
+    echo "CONFIG_PACKAGE_iw=y" >> .config
     echo "✅ iw 已加入 .config"
   fi
 fi
@@ -214,8 +236,6 @@ if [ -f "$PATCH_CPUUSAGE" ]; then
 else
   echo "ℹ️ 未找到 $PATCH_CPUUSAGE，跳过概览页 CPU 使用率行定制"
 fi
-
-[ -z "$FW_BUILD_TIME" ] && FW_BUILD_TIME="$(TZ="${TZ:-Asia/Shanghai}" date '+%Y-%m-%d %H:%M')"
 
 # ========== 全面隐藏固件版本信息 ==========
 RELEASE_TPL="package/base-files/files/etc/openwrt_release"
@@ -246,30 +266,39 @@ if [ -f "$BANNER" ]; then
 fi
 
 # apk 软件包源：默认中科大 USTC，双路径兼容
+# B-H2: targets 子目录（an7581/an7583…）与架构（aarch64_cortex-a53…）不再写死，
+#   从已加载的 .config 推导；读不到再回退 an7581 / aarch64_cortex-a53，避免 7583 机型套错源。
+APK_SUBTARGET="$(grep -m1 '^CONFIG_TARGET_SUBTARGET=' .config 2>/dev/null | cut -d= -f2 | tr -d '\"')"
+APK_SUBTARGET="${APK_SUBTARGET:-an7581}"
+APK_ARCH="$(grep -m1 '^CONFIG_ARCH_PACKAGES=' .config 2>/dev/null | cut -d= -f2 | tr -d '\"')"
+APK_ARCH="${APK_ARCH:-aarch64_cortex-a53}"
+echo "  apk targets=airoha/${APK_SUBTARGET} arch=${APK_ARCH}"
+
 mkdir -p files/etc/apk/repositories.d
 
-cat > files/etc/apk/repositories.d/distfeeds.list <<'EOF'
-https://mirrors.ustc.edu.cn/immortalwrt/snapshots/targets/airoha/an7581/packages
-https://mirrors.ustc.edu.cn/immortalwrt/snapshots/packages/aarch64_cortex-a53/base
-https://mirrors.ustc.edu.cn/immortalwrt/snapshots/packages/aarch64_cortex-a53/luci
-https://mirrors.ustc.edu.cn/immortalwrt/snapshots/packages/aarch64_cortex-a53/packages
-https://mirrors.ustc.edu.cn/immortalwrt/snapshots/packages/aarch64_cortex-a53/routing
-https://mirrors.ustc.edu.cn/immortalwrt/snapshots/packages/aarch64_cortex-a53/telephony
+cat > files/etc/apk/repositories.d/distfeeds.list <<EOF
+https://mirrors.ustc.edu.cn/immortalwrt/snapshots/targets/airoha/${APK_SUBTARGET}/packages
+https://mirrors.ustc.edu.cn/immortalwrt/snapshots/packages/${APK_ARCH}/base
+https://mirrors.ustc.edu.cn/immortalwrt/snapshots/packages/${APK_ARCH}/luci
+https://mirrors.ustc.edu.cn/immortalwrt/snapshots/packages/${APK_ARCH}/packages
+https://mirrors.ustc.edu.cn/immortalwrt/snapshots/packages/${APK_ARCH}/routing
+https://mirrors.ustc.edu.cn/immortalwrt/snapshots/packages/${APK_ARCH}/telephony
 EOF
 
-cat > files/etc/apk/repositories <<'EOF'
-https://mirrors.ustc.edu.cn/immortalwrt/snapshots/targets/airoha/an7581/packages
-https://mirrors.ustc.edu.cn/immortalwrt/snapshots/packages/aarch64_cortex-a53/base
-https://mirrors.ustc.edu.cn/immortalwrt/snapshots/packages/aarch64_cortex-a53/luci
-https://mirrors.ustc.edu.cn/immortalwrt/snapshots/packages/aarch64_cortex-a53/packages
-https://mirrors.ustc.edu.cn/immortalwrt/snapshots/packages/aarch64_cortex-a53/routing
-https://mirrors.ustc.edu.cn/immortalwrt/snapshots/packages/aarch64_cortex-a53/telephony
+cat > files/etc/apk/repositories <<EOF
+https://mirrors.ustc.edu.cn/immortalwrt/snapshots/targets/airoha/${APK_SUBTARGET}/packages
+https://mirrors.ustc.edu.cn/immortalwrt/snapshots/packages/${APK_ARCH}/base
+https://mirrors.ustc.edu.cn/immortalwrt/snapshots/packages/${APK_ARCH}/luci
+https://mirrors.ustc.edu.cn/immortalwrt/snapshots/packages/${APK_ARCH}/packages
+https://mirrors.ustc.edu.cn/immortalwrt/snapshots/packages/${APK_ARCH}/routing
+https://mirrors.ustc.edu.cn/immortalwrt/snapshots/packages/${APK_ARCH}/telephony
 EOF
 
 echo "✅ apk 软件包源默认 -> USTC snapshots（完整 6 个源，双路径兼容）"
 
-# 后台菜单不显示"NAS"字样（package/feeds 下是符号链接，grep -r 不跟随，保留作为兼容垫片）
-grep -rl "NAS" package/feeds --include='*.lua' 2>/dev/null \
+# 后台菜单不显示"NAS"字样
+# B-L9: package/feeds 下全是符号链接，grep -r 不跟随会空转；改扫 feeds/luci 真实源码目录。
+grep -rl "NAS" feeds/luci --include='*.lua' 2>/dev/null \
   | while IFS= read -r f; do
       sed -i "s/_('NAS')/_(' ')/g; s/'NAS'/' '/g" "$f" || true
     done || true
@@ -280,10 +309,13 @@ rm -rf package/feeds/luci/luci-app-argon-config 2>/dev/null || true
 
 # ⚠ package/feeds/luci 下全是符号链接，grep -r 不跟随。改用 feeds/luci（真实目录）。
 grep -rl "argon-config" feeds/luci --include="*.json" 2>/dev/null | while IFS= read -r f; do
-  if python3 -c "import json; json.load(open('$f'))" 2>/dev/null; then
+  # B-M8: 文件路径经环境变量传给 Python，不再把 shell 变量拼进 Python 源码字符串，避免路径注入。
+  export ARGON_F="$f"
+  if python3 -c "import json,os; json.load(open(os.environ['ARGON_F']))" 2>/dev/null; then
     python3 -c "
-import json
-with open('$f', 'r') as fp:
+import json, os
+f = os.environ['ARGON_F']
+with open(f, 'r') as fp:
     data = json.load(fp)
 def remove_argon(obj):
     if isinstance(obj, dict):
@@ -299,7 +331,7 @@ def remove_argon(obj):
         for item in obj:
             remove_argon(item)
 remove_argon(data)
-with open('$f', 'w') as fp:
+with open(f, 'w') as fp:
     json.dump(data, fp, indent=2)
 " 2>/dev/null || true
   else
@@ -307,6 +339,7 @@ with open('$f', 'w') as fp:
     sed -i 's/,\s*"luci-app-argon-config"//g' "$f" || true
     sed -i 's/"luci-app-argon-config"//g' "$f" || true
   fi
+  unset ARGON_F
 done || true
 
 grep -rl "argon-config" feeds/luci --include="*.js" --include="*.lua" 2>/dev/null | while IFS= read -r f; do
@@ -453,6 +486,11 @@ done
 SSR_PORT=$(uci get shadowsocksr.@global[0].main_port 2>/dev/null || echo "1080")
 log "SSR Plus+ 端口: $SSR_PORT"
 
+# B-M3: 入站放行只绑定 LAN 接口，避免 SSR 监听端口对 WAN 暴露。
+LAN_IF="$(uci -q get network.lan.device 2>/dev/null)"
+[ -z "$LAN_IF" ] && LAN_IF="br-lan"
+log "SSR 入站仅放行 LAN 接口: $LAN_IF"
+
 SSR_UID=""
 SSR_PIDS=$(pidof ssr-redir 2>/dev/null || echo "")
 if [ -n "$SSR_PIDS" ]; then
@@ -463,17 +501,17 @@ if [ -n "$SSR_PIDS" ]; then
 fi
 
 if [ "$FW_VER" = "fw4" ]; then
-  nft add rule inet fw4 input tcp dport "$SSR_PORT" accept comment "SSR Plus+ input" 2>/dev/null || true
+  nft add rule inet fw4 input iifname "$LAN_IF" tcp dport "$SSR_PORT" accept comment "SSR Plus+ input (LAN only)" 2>/dev/null || true
   if [ -n "$SSR_UID" ]; then
     nft add rule inet fw4 output meta skuid "$SSR_UID" accept comment "SSR Plus+ output" 2>/dev/null || true
   fi
-  log "fw4 入站/出站规则已配置（转发规则由 SSR Plus+ 自身管理）"
+  log "fw4 入站/出站规则已配置（入站限 LAN；转发规则由 SSR Plus+ 自身管理）"
 else
-  iptables -I INPUT -p tcp --dport "$SSR_PORT" -j ACCEPT -m comment --comment "SSR Plus+ input" 2>/dev/null || true
+  iptables -I INPUT -i "$LAN_IF" -p tcp --dport "$SSR_PORT" -j ACCEPT -m comment --comment "SSR Plus+ input (LAN only)" 2>/dev/null || true
   if [ -n "$SSR_UID" ]; then
     iptables -I OUTPUT -m owner --uid-owner "$SSR_UID" -j ACCEPT -m comment --comment "SSR Plus+ output" 2>/dev/null || true
   fi
-  log "fw3 入站/出站规则已配置（转发规则由 SSR Plus+ 自身管理）"
+  log "fw3 入站/出站规则已配置（入站限 LAN；转发规则由 SSR Plus+ 自身管理）"
 fi
 
 exit 0
@@ -483,12 +521,8 @@ echo "✅ SSR Plus+ 入站/出站防火墙脚本已写入（转发规则交给 S
 
 # ========== EIP93 NPU 硬件加密优化 ==========
 echo "🔍 优化 EIP93 NPU 硬件加密调用..."
-mkdir -p files/etc/modules.d
-cat > files/etc/modules.d/zz-eip93 <<'EOF'
-# EIP93 硬件加密驱动
-crypto-hw-eip93
-EOF
-echo "✅ EIP93 驱动模块加载配置已写入"
+# B-L8: 不再无条件写 /etc/modules.d/zz-eip93（模块在不支持的机型上会在开机时报错），
+#   改由下面的 uci-defaults 脚本先确认模块存在 / 已加载，再决定是否 modprobe。
 
 mkdir -p files/etc/uci-defaults
 cat > files/etc/uci-defaults/90-eip93-npu-optimize <<'EOF'
@@ -498,16 +532,19 @@ log() {
   echo "[eip93-npu] $@"
 }
 
+# B-L8: 收窄匹配范围，只认 EIP93 / 硬件加密模块，避免裸匹配 "crypto" 命中内核通用 crypto 子系统。
+HW_MOD_RE='eip93|crypto_hw|crypto-hw'
+
 i=0
 while [ $i -lt 5 ]; do
-  if [ -d "/sys/class/crypto" ] || lsmod 2>/dev/null | grep -q "crypto"; then
+  if [ -d "/sys/class/crypto" ] || lsmod 2>/dev/null | grep -qE "$HW_MOD_RE"; then
     break
   fi
   i=$((i + 1))
   sleep 1
 done
 
-if lsmod 2>/dev/null | grep -q "eip93\|crypto_hw\|crypto-hw"; then
+if lsmod 2>/dev/null | grep -qE "$HW_MOD_RE"; then
   log "✅ EIP93 硬件加密驱动已加载"
   if [ -d "/sys/class/crypto" ]; then
     hw_algs=$(ls /sys/class/crypto/ 2>/dev/null | grep -i "aes\|des\|sha" | head -5)
@@ -519,9 +556,12 @@ if lsmod 2>/dev/null | grep -q "eip93\|crypto_hw\|crypto-hw"; then
   fi
 else
   log "⚠️  EIP93 驱动未加载，尝试手动加载..."
-  modprobe crypto-hw-eip93 2>/dev/null || true
-  sleep 1
-  if lsmod 2>/dev/null | grep -q "eip93\|crypto_hw\|crypto-hw"; then
+  # 先确认模块在 /lib/modules 里存在，不存在则不强行 modprobe。
+  if [ -n "$(find /lib/modules -name 'crypto-hw-eip93.ko*' 2>/dev/null | head -1)" ]; then
+    modprobe crypto-hw-eip93 2>/dev/null || true
+    sleep 1
+  fi
+  if lsmod 2>/dev/null | grep -qE "$HW_MOD_RE"; then
     log "✅ 手动加载 EIP93 成功"
   else
     log "⚠️  EIP93 驱动加载失败，使用软件加密（可能此硬件不支持）"
@@ -564,8 +604,8 @@ echo 10 > /proc/sys/vm/swappiness 2>/dev/null || true
 echo 20 > /proc/sys/vm/dirty_ratio 2>/dev/null || true
 echo 10 > /proc/sys/vm/dirty_background_ratio 2>/dev/null || true
 
-log "关闭不必要的后台日志..."
-uci -q set uhttpd.main.no_log='1' 2>/dev/null || true
+# B-L6: 不再设置 uhttpd.main.no_log='1' —— 关闭 Web 审计日志会丢失后台访问记录，
+#   保留 uhttpd 默认日志；内存占用由上面的 log_size / log_buffer_size 控制。
 
 uci -q commit system
 log "内存优化配置已提交（不影响网络速度）"
@@ -624,9 +664,15 @@ if [ -f /etc/banner ]; then
 fi
 
 if [ -f /etc/config/luci ]; then
-  uci set luci.main.mediaurlbase='/luci-static/argon' 2>/dev/null || true
-  uci commit luci 2>/dev/null || true
-  log "已设置默认主题为 Argon"
+  # B-L7: 先确认 Argon 主题静态目录已编入固件，再设置默认主题；
+  #   主题包缺失时不指向不存在的 mediaurlbase，保留 LuCI 默认主题。
+  if [ -d /www/luci-static/argon ]; then
+    uci set luci.main.mediaurlbase='/luci-static/argon' 2>/dev/null || true
+    uci commit luci 2>/dev/null || true
+    log "已设置默认主题为 Argon"
+  else
+    log "ℹ️ 未找到 Argon 主题静态目录，保留 LuCI 默认主题"
+  fi
 fi
 
 log "版本信息隐藏完成（三重保险）"

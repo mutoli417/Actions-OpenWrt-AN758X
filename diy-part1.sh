@@ -10,12 +10,6 @@
 # Description: OpenWrt DIY script part 1 (Before Update feeds)
 #
 
-# Uncomment a feed source
-#sed -i 's/^#\(.*helloworld\)/\1/' feeds.conf.default
-
-# Add a feed source
-#echo 'src-git helloworld https://github.com/fw876/helloworld' >>feeds.conf.default
-
 echo "=========================================="
 echo "diy-part1.sh: 拉取第三方插件与定制包"
 echo "=========================================="
@@ -33,23 +27,6 @@ set -euo pipefail
 # =========================================================
 ADD_LUCI_APP=true     # luci-app-natmode + luci-app-pon-status（qwe-qaq/luci-app monorepo）
 ADD_AIROHA_NPU=true    # luci-app-airoha-npu：Airoha SoC 状态页（NPU/CPU/Frame Engine/PPE）
-ADD_FLUENT=false       # luci-theme-fluent：纯净版不编
-ADD_FLUENT_LITE=false
-ADD_FLUENT_DASH=false
-ADD_PASSWALL=false     # PassWall：纯净版不编
-ADD_OPENCLASH=false    # OpenClash：纯净版不编
-ADD_MOSDNS=false       # MosDNS：纯净版不编
-ADD_LUCKY=false        # Lucky：纯净版不编
-ADD_TAILSCALE=false    # Tailscale：纯净版不编
-ADD_OPENLIST=false     # Openlist：纯净版不编
-ADD_SMARTDNS=false     # SmartDNS：纯净版不编
-ADD_EASYTIER=false     # EasyTier：纯净版不编
-ADD_POWEROFF=false     # 关机按钮
-ADD_WOL=false          # 网络唤醒
-ADD_WATCHDOG=false     # 看门狗
-ADD_TASKPLAN=false     # 定时任务
-ADD_OAF=false          # 应用过滤
-ADD_UPNP=false         # UPnP
 
 # =========================================================
 # FTTR（H3C HM2004-DU）相关
@@ -57,7 +34,9 @@ ADD_UPNP=false         # UPnP
 # 默认关闭：FTTR 是 H3C 私有协议，需要额外的 FPGA 驱动和 Rust 工具链，
 #   普通 PON 网关用不到，编进去会大幅增加编译时间和镜像大小。
 ADD_FTTR=false         # FTTR 全套（kmod-h3c-fmcs + h3c-fmcs-firmware + h3c-fttr-tools + luci-app-fttr）
-FTTR_PROFILE="${PROFILE:-none}"  # h3c_hm2004-du 即可。
+ADD_FMCS=false         # FTTR: kmod-h3c-fmcs 内核模块（默认关，避免 set -u 未绑定变量）
+ADD_FMCS_FW=false      # FTTR: h3c-fmcs-firmware 固件（默认关）
+ADD_FTTR_TOOLS=false   # FTTR: h3c-fttr-tools 用户态工具（默认关）
 
 clone() {  # clone <url> <dir> [branch]
   local url="$1" dir="$2" br="$3"
@@ -103,7 +82,8 @@ grep -q '^src-git helloworld' feeds.conf.default || \
 # =========================================================
 if [ "$ADD_LUCI_APP" = "true" ]; then
   LUCI_APP_URL="https://github.com/qwe-qaq/luci-app"
-  LUCI_APP_TMP="$(mktemp -d)/luci-app"
+  LUCI_APP_PARENT="$(mktemp -d)"
+  LUCI_APP_TMP="$LUCI_APP_PARENT/luci-app"
   if ! clone "$LUCI_APP_URL" "$LUCI_APP_TMP" main; then
     echo "::error::qwe-qaq/luci-app 拉取失败，natmode / pon-status 会被 defconfig 剔除"
     exit 1
@@ -117,7 +97,7 @@ if [ "$ADD_LUCI_APP" = "true" ]; then
     cp -r "$LUCI_APP_TMP/$p" "$PKG_DIR/"
     echo "✅ 已拷贝: $p"
   done
-  rm -rf "$LUCI_APP_TMP"
+  rm -rf "$LUCI_APP_PARENT"
 fi
 
 # =========================================================
@@ -162,7 +142,10 @@ if [ "$ADD_AIROHA_NPU" = "true" ]; then
   # =========================================================
   NPU_RPCD="$PKG_DIR/luci-app-airoha-npu/root/usr/libexec/rpcd/luci.airoha_npu"
   if [ -f "$GITHUB_WORKSPACE/patch-airoha-npu.py" ]; then
-    python3 "$GITHUB_WORKSPACE/patch-airoha-npu.py" "$NPU_RPCD"
+    # B-M12: 补丁是幂等增强，上游 rpcd 格式变动导致正则未命中时降级为 warning，
+    #   不阻断整个 diy-part1（与其它 || true 的可选补丁一致）。
+    python3 "$GITHUB_WORKSPACE/patch-airoha-npu.py" "$NPU_RPCD" \
+      || echo "::warning::NPU 健壮性补丁未命中，跳过（不阻断构建）"
   else
     echo "::warning::未找到 patch-airoha-npu.py，跳过 NPU 健壮性补丁"
   fi
@@ -236,7 +219,7 @@ done
 
 if [ -n "$HARD_MISS" ]; then
   echo "::error::以下必装插件未进入 tmp/.packageinfo，defconfig 会把 .config 里的 =y 静默剔除:$HARD_MISS"
-  echo "  已索引缺失清单:$INDEX_MISS"
+  echo "  已索引缺失清单:$HARD_MISS"
   exit 1
 fi
 

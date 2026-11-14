@@ -61,7 +61,10 @@ step6_new = (
 )
 src, k = step6_re.subn(step6_new, src)
 if k != 1:
-    sys.exit("Step6 block matched %d times, expected 1" % k)
+    # B-M12: 上游 rpcd 格式变动导致块未命中时，降级为告警并原样跳过，
+    #   不把脚本以非零码退出，避免 diy-part1 在 set -euo pipefail 下整体挂构建。
+    print("warning: Step6 block matched %d time(s), expected 1 — skip patching, file untouched" % k)
+    sys.exit(0)
 print("replaced Step6 block: 1")
 
 # --- 2. 批量替换 $(($(devmem ADDR [2>/dev/null]))) -> $(dm_read ADDR) ---
@@ -70,7 +73,9 @@ devmem_re = re.compile(
 )
 src, n = devmem_re.subn(r"$(dm_read \1)", src)
 if n == 0:
-    sys.exit("no $(($(devmem ...))) site matched")
+    # B-M12: 无 devmem 站点可替换时告警跳过，不阻断构建。
+    print("warning: no $(($(devmem ...))) site matched — skip patching, file untouched")
+    sys.exit(0)
 print("replaced devmem arithmetic sites: %d" % n)
 
 # --- 3. 最后在 json_escape 函数后插入 dm_read（放最后，避免注释被第 2 步替换）---
@@ -88,7 +93,9 @@ dm_read_block = (
 )
 anchor = re.search(r"json_escape\(\) \{.*?\n\}\n", src, re.S)
 if not anchor:
-    sys.exit("anchor json_escape not found")
+    # B-M12: 锚点未找到时告警跳过，不写回文件、不阻断构建。
+    print("warning: anchor json_escape not found — skip patching, file untouched")
+    sys.exit(0)
 src = src[:anchor.end()] + dm_read_block + src[anchor.end():]
 
 open(path, "w", encoding="utf-8", newline="\n").write(src)
