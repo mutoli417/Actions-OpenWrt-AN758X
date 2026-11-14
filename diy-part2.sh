@@ -268,9 +268,9 @@ fi
 # apk 软件包源：默认中科大 USTC，双路径兼容
 # B-H2: targets 子目录（an7581/an7583…）与架构（aarch64_cortex-a53…）不再写死，
 #   从已加载的 .config 推导；读不到再回退 an7581 / aarch64_cortex-a53，避免 7583 机型套错源。
-APK_SUBTARGET="$(grep -m1 '^CONFIG_TARGET_SUBTARGET=' .config 2>/dev/null | cut -d= -f2 | tr -d '\"')"
+APK_SUBTARGET="$(grep -m1 '^CONFIG_TARGET_SUBTARGET=' .config 2>/dev/null | cut -d= -f2 | tr -d '\"')" || true
 APK_SUBTARGET="${APK_SUBTARGET:-an7581}"
-APK_ARCH="$(grep -m1 '^CONFIG_ARCH_PACKAGES=' .config 2>/dev/null | cut -d= -f2 | tr -d '\"')"
+APK_ARCH="$(grep -m1 '^CONFIG_TARGET_ARCH_PACKAGES=' .config 2>/dev/null | cut -d= -f2 | tr -d '\"')" || true
 APK_ARCH="${APK_ARCH:-aarch64_cortex-a53}"
 echo "  apk targets=airoha/${APK_SUBTARGET} arch=${APK_ARCH}"
 
