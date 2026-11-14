@@ -105,11 +105,15 @@ kcptun 后端默认关闭（`INCLUDE_Kcptun=n`），剥除该条件依赖不影�
 但 `packages` 的 `gst1-plugins-base` 依赖 `libmesa / libwayland / libgraphene`，
 这三个库正由 video feed 提供，因此**保留 feed**，只摘掉缺 qt6base 子包的 quick/svg 两个目录。
 
-补丁在「Update & install feeds」步骤、`feeds install -a` 之后删除对应索引目录：
+补丁在 diy-part1 之后单独一步删除对应索引目录：
 
 ```sh
 rm -rf package/feeds/video/qt6quick package/feeds/video/qt6svg
 ```
+
+⚠ 时机必须在 diy-part1 **之后**：diy-part1.sh 末尾还会再跑一次
+`./scripts/feeds install -a`，若在首次 feeds 步骤里删，符号链接会被这次 install
+重建，告警依旧。因此删除动作放在 diy-part1 步骤之后、defconfig 之前。
 
 这样 qt6quick/qt6svg 缺 qt6base 的告警从根上消除，同时 mesa/wayland/graphene 仍在，
 gst1-plugins-base 不再缺库；`packages / luci / routing / telephony / pon_drivers / pon_userspace` 等其他 feed 不受影响。
