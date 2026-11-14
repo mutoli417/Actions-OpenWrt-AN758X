@@ -798,7 +798,7 @@ jobs:
           #   - sing-box 不是 SSR Plus+ 的后端依赖，helloworld feed 也不提供；
           #   - xray-core 由 luci-app-ssr-plus 的 INCLUDE_Xray 条件依赖在 defconfig
           #     时自动带入，单独强制 =y 属冗余，缺依赖时还会被静默剔除。
-          FORCED_PKGS="zoneinfo-asia libffi iw luci-app-airoha-npu luci-app-pon-status luci-app-natmode firewall4 kmod-nft-fullcone luci-mod-status airoha-ponctl jsonfilter rpcd-mod-file luci-app-ssr-plus luci-app-iptv luci-i18n-iptv-zh-cn nlbwmon luci-app-nlbwmon luci-i18n-nlbwmon-zh-cn luci-lib-chartjs mesh11sd"
+          FORCED_PKGS="zoneinfo-asia libffi iw luci-app-airoha-npu luci-app-pon-status luci-app-natmode firewall4 kmod-nft-fullcone luci-mod-status airoha-ponctl jsonfilter rpcd-mod-file luci-app-ssr-plus luci-app-iptv luci-i18n-iptv-zh-cn nlbwmon luci-app-nlbwmon luci-i18n-nlbwmon-zh-cn luci-lib-chartjs"
           echo "🔒 写入强制包清单（defconfig 前，幂等先删后加）..."
           for pkg in $FORCED_PKGS; do
             sed -i "/^CONFIG_PACKAGE_${pkg}[= ]/d; /^# CONFIG_PACKAGE_${pkg} is not set/d" .config 2>/dev/null || true
@@ -858,7 +858,7 @@ jobs:
           # =========================================================
           OPT_MISS=""
           for p in luci-app-airoha-npu luci-app-pon-status luci-app-natmode \
-                   nlbwmon luci-app-nlbwmon mesh11sd; do
+                   nlbwmon luci-app-nlbwmon; do
             if ! grep -q "^CONFIG_PACKAGE_${p}=y" .config; then
               OPT_MISS="$OPT_MISS $p"
               echo "::warning::${p} 在 defconfig 后未启用"
