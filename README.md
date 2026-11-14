@@ -36,7 +36,7 @@ Argon 菜单隐藏、版本信息搜索等非 `.config` 操作保留不动。
 ### 改动 2：Validate 步骤在最后一次 defconfig 之前写入合并清单
 
 在 `bash scripts/defconfig.sh` 之前插入合并后的强制包清单（幂等：先删旧行/
-`is not set` 行，再追加 `=y`），共 20 个包：
+`is not set` 行，再追加 `=y`），共 19 个包：
 
 ```
 zoneinfo-asia libffi iw
@@ -44,7 +44,7 @@ luci-app-airoha-npu luci-app-pon-status luci-app-natmode
 firewall4 kmod-nft-fullcone luci-mod-status airoha-ponctl jsonfilter rpcd-mod-file
 luci-app-ssr-plus
 luci-app-iptv luci-i18n-iptv-zh-cn
-nlbwmon luci-app-nlbwmon luci-i18n-nlbwmon-zh-cn luci-lib-chartjs mesh11sd
+nlbwmon luci-app-nlbwmon luci-i18n-nlbwmon-zh-cn luci-lib-chartjs
 ```
 
 > `xray-core` / `sing-box` 不进强制清单：
@@ -137,6 +137,23 @@ gst1-plugins-base 不再缺库；`packages / luci / routing / telephony / pon_dr
 `rm -rf` 上述 7 个目录（带 `2>/dev/null || true` 兜底）。这些是源码 overlay 实体目录，
 `feeds update/install` 不会重建；保留 autocore、busybox、default-settings（基座启用，告警为条件/时序噪声）。
 
+### 改动 9：摘除 mesh11sd 包（无无线后端，避免崩溃循环与替换 LuCI 入口）
+
+本机 an7581 无无线后端（缺 wpad / cfg80211 / mac80211 / mt76），mesh11sd 无法组网；其在
+`auto_config=1` 自治模式下还会把原厂 `/www/cgi-bin/luci` 替换成自身状态页，导致进不去 LuCI。
+真机核对：`mesh11sd-7.3.1-r1` 无 `Depends`、无任何已装包反向依赖，可安全摘除。
+
+三处改动：
+
+1. `configs/an7581.config`（B 仓库自带精简配置）L404 `CONFIG_PACKAGE_mesh11sd=y` → 删除该行
+   （或改为 `# CONFIG_PACKAGE_mesh11sd is not set`）。
+2. `.github/workflows/build-ponwrt.yml` L801 `FORCED_PKGS` 末尾去掉 `mesh11sd`。
+3. 同文件 L861 `OPT_MISS` 校验列表去掉 `mesh11sd`。
+
+- 基座 `pbs05/ponwrt` 的 `configs/an7581.config` 本就是 `# CONFIG_PACKAGE_mesh11sd is not set`，无需改。
+- `diy-part2.sh` 无 mesh11sd 写入，无需改。
+- 保留 `CONFIG_PACKAGE_MAC80211_MESH=y`：这是内核 802.11s mesh 支持项，与 mesh11sd 应用包无关，不在本次摘除范围。
+
 ## 校验口径
 
 - `MISSING`（PON 核心链路，缺包直接 `exit 1`）与 `OPT_MISS`（状态插件，缺包报错）
@@ -152,7 +169,7 @@ gst1-plugins-base 不再缺库；`packages / luci / routing / telephony / pon_dr
 1. **建议试编译验证**：规范前事后追加只保证 grep 看到 `=y`，并不保证包真正编入；
    规范后 defconfig 会按真实依赖解析。首次按本补丁构建时，留意 Validate 的
    `MISSING` / `OPT_MISS`、强制清单非阻断警告与 defconfig WARNING 汇总，确认
-   20 个强制包均被接受。
+   19 个强制包均被接受。
 2. **xray-core / sing-box**：不进强制清单。sing-box 与 SSR Plus+ 无依赖关系、
    helloworld feed 也不提供；xray-core 由 SSR Plus+ 的 `INCLUDE_Xray` 条件依赖
    自动带入。若首跑诊断显示 xray-core 被剔，按其 Depends 行补依赖即可；二者均不
