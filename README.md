@@ -118,6 +118,25 @@ rm -rf package/feeds/video/qt6quick package/feeds/video/qt6svg
 这样 qt6quick/qt6svg 缺 qt6base 的告警从根上消除，同时 mesa/wayland/graphene 仍在，
 gst1-plugins-base 不再缺库；`packages / luci / routing / telephony / pon_drivers / pon_userspace` 等其他 feed 不受影响。
 
+### 改动 8：裁剪 7 个用不到的 overlay 可选包目录（消步骤 12 的 20 条上游缺依赖告警）
+
+步骤 12「Update & install feeds」扫描时，以下 overlay 目录的 Makefile 因依赖不存在报 WARNING；
+逐项核对确认它们基座全栈 `not set`、无启用包反向依赖（明细见仓库根目录《可选包裁剪核对方案.md》）：
+
+| 目录 | 包 | 告警依赖 |
+|---|---|---|
+| `package/utils/audit` | audit-userspace | libev |
+| `package/emortal/autosamba` | autosamba | luci-app-samba4, wsdd2 |
+| `package/utils/bluetooth-uart` | bluetooth-uart | bluez-utils |
+| `package/boot/kexec-tools` | kexec-tools | liblzma, libzstd |
+| `package/network/services/lldpd` | lldpd | libnetsnmp |
+| `package/utils/pcat-manager` | pcat-manager | glib2, libgpiod（`@TARGET_rockchip_armv8 @BROKEN`） |
+| `package/utils/policycoreutils` | policycoreutils | libpam |
+
+补丁在源码克隆之后、`feeds install -a` 之前新增一步 `Trim unused optional overlay packages`，
+`rm -rf` 上述 7 个目录（带 `2>/dev/null || true` 兜底）。这些是源码 overlay 实体目录，
+`feeds update/install` 不会重建；保留 autocore、busybox、default-settings（基座启用，告警为条件/时序噪声）。
+
 ## 校验口径
 
 - `MISSING`（PON 核心链路，缺包直接 `exit 1`）与 `OPT_MISS`（状态插件，缺包报错）
