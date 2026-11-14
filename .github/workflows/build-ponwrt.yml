@@ -140,9 +140,9 @@ on:
           - 'true'
           - 'false'
       fw_author:
-        description: '覆盖固件版本后缀的作者名（LuCI 概览页「固件版本」）。留空 = qwe'
+        description: '覆盖固件版本后缀的作者名（LuCI 概览页「固件版本」）。留空 = ponwrt'
         required: false
-        default: 'qwe'
+        default: 'ponwrt'
       upload_release:
         description: '固件发布到 Release（false 则只传 Artifact）'
         required: false
