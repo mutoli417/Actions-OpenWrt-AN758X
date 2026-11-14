@@ -40,33 +40,19 @@ for dev in $(uci -q show wireless | sed -n 's/^wireless\.\([A-Za-z0-9_-]*\)=wifi
 			log "$dev：未检测到 160MHz 能力，回落为 $ht"
 		fi
 		uci -q set wireless.$dev.country="$COUNTRY"
-		uci -q set wireless.$dev.country_ie='1'
 		uci -q set wireless.$dev.channel="$CHANNEL"
 		uci -q set wireless.$dev.htmode="$ht"
 		log "$dev (5G): country=$COUNTRY channel=$CHANNEL htmode=$ht"
 	else
 		uci -q set wireless.$dev.country="$COUNTRY_24G"
-		uci -q set wireless.$dev.country_ie='1'
 		uci -q set wireless.$dev.channel="$CHANNEL_24G"
 		log "$dev (2.4G): country=$COUNTRY_24G channel=$CHANNEL_24G"
 	fi
 	changed=1
 done
 
-for iface in $(uci -q show wireless | sed -n 's/^wireless\.\([A-Za-z0-9_-]*\)=wifi-iface$/\1/p'); do
-	dev="$(uci -q get wireless.$iface.device 2>/dev/null)"
-	band="$(uci -q get wireless.$dev.band 2>/dev/null)"
-	hwmode="$(uci -q get wireless.$dev.hwmode 2>/dev/null)"
-	is5g=0
-	[ "$band" = "5g" ] && is5g=1
-	[ -z "$band" ] && [ "$hwmode" = "11a" ] && is5g=1
-	if [ "$is5g" = "1" ]; then
-		uci -q set wireless.$iface.ssid="TP-LINK_6628_5G"
-	else
-		uci -q set wireless.$iface.ssid="TP-LINK_6628"
-	fi
-	changed=1
-done
+# B-L11: 不再硬编码覆盖 SSID（保留首次开机生成或用户自定义 SSID）；
+#   country_ie 非标准 UCI 选项，已移除（国家码 country 已足够）。
 
 if [ "$changed" = "1" ]; then
 	uci -q commit wireless
