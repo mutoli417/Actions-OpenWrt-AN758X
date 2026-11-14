@@ -682,36 +682,6 @@ jobs:
 
           make defconfig
 
-          # ⚠ 安全网：make defconfig 会把 .config 重新展开。如果
-          #   configs/${SOC}.config 里包含 `# CONFIG_PACKAGE_xxx is not set`，
-          #   就会覆盖 diy-part2.sh 的追加（zoneinfo-asia / libffi / iw）。
-          #   这里检测并重新追加，确保用户定制不被吞。
-          for pkg in zoneinfo-asia libffi iw; do
-            if ! grep -q "^CONFIG_PACKAGE_${pkg}=y" .config; then
-              sed -i "/^CONFIG_PACKAGE_${pkg}[= ]/d; /^# CONFIG_PACKAGE_${pkg} is not set/d" .config
-              echo "CONFIG_PACKAGE_${pkg}=y" >> .config
-              echo "🔒 已重新强制启用 ${pkg}（diy-part2.sh 的设置被 defconfig 覆盖）"
-            fi
-          done
-
-          # 强制确保状态插件 + 全部依赖配置正确（防止被 defconfig 剔除）
-          echo "🔒 强制确保状态插件 + 全部依赖配置（defconfig 后）..."
-          for pkg in luci-app-airoha-npu luci-app-pon-status luci-app-natmode; do
-            sed -i "/$pkg/d" .config 2>/dev/null || true
-            echo "CONFIG_PACKAGE_$pkg=y" >> .config
-          done
-          for pkg in firewall4 kmod-nft-fullcone luci-mod-status airoha-ponctl jsonfilter rpcd-mod-file; do
-            sed -i "/$pkg/d" .config 2>/dev/null || true
-            echo "CONFIG_PACKAGE_$pkg=y" >> .config
-          done
-          # 强制启用 SSR Plus+
-          echo "🔒 强制启用 SSR Plus+..."
-          sed -i '/luci-app-ssr-plus/d' .config 2>/dev/null || true
-          echo "CONFIG_PACKAGE_luci-app-ssr-plus=y" >> .config
-          # 安装 SSR Plus+ 依赖的内核（避免没有内核导致反复重启）
-          echo "CONFIG_PACKAGE_xray-core=y" >> .config
-          echo "CONFIG_PACKAGE_sing-box=y" >> .config
-
           # 固件版本隐藏已在本步骤开头由 scripts/patch-luci-version.sh 完成：
           # 把 10_system.js 的固件版本整行（含标签）从 fields 数组删除。LuCI 版本
           # 是运行时 RPC 动态拼接的（源码无 "LuCI Master" 字面量），文本删除无效。
@@ -722,13 +692,6 @@ jobs:
           grep -rl "argon-config" feeds/luci --include="*.json" 2>/dev/null | while IFS= read -r f; do
             sed -i '/argon-config/d' "$f" 2>/dev/null || true
           done || true
-          
-          # 强制启用 IPTV 相关包
-          echo "🔒 强制启用 IPTV 相关包..."
-          for pkg in luci-app-iptv luci-i18n-iptv-zh-cn; do
-            sed -i "/$pkg/d" .config 2>/dev/null || true
-            echo "CONFIG_PACKAGE_$pkg=y" >> .config
-          done
           
           # 搜索包含版本信息的文件
           echo "🔍 搜索包含版本信息的文件..."
@@ -767,13 +730,12 @@ jobs:
       # =========================================================
       # 10. defconfig + 配置校验
       #
-      #    ⚠ 本步骤里 defconfig.sh 会跑一次 make defconfig（第二次，
-      #      第一次在 Configure 步骤里）。Configure 里强制追加的包可能
-      #      被这次 defconfig 重新展开冲掉（源码树里不存在的包会被静默
-      #      标为 is not set）。因此 defconfig.sh 之后必须【再追加一次】
-      #      强制配置，然后再做 MISSING / OPT_MISS 校验 —— 否则校验拿到
-      #      的是「被冲掉的 .config」，会报出指向错误方向的
-      #      「检查 feeds 是否完整」。
+      #    ⚠ 本步骤里 defconfig.sh 会跑最后一次 make defconfig（第二次，
+      #      第一次在 Configure 步骤里）。强制包清单已在 defconfig 之前
+      #      写入 .config，由 kconfig 一次性解析依赖；defconfig 之后不再
+      #      手改 .config，避免编译起步报 out-of-sync。源码树/feeds 里
+      #      不存在的包会被 defconfig 静默剔除，随后的 MISSING / OPT_MISS
+      #      校验如实上报。
       #
       #    ★ 这里不再算缓存 key 了 —— key 在 2.1 就算好（提交号 + 前缀），
       #      恢复缓存在 2.2 也已经做完。缓存与 .config 彻底解耦，
@@ -794,26 +756,52 @@ jobs:
           #   scripts/defconfig.sh 负责：失败 → 打真日志 + exit 1；
           #   成功 → 只打尾部 5 行，另把 WARNING 汇总出来
           #   （WARNING 正是「包被静默剔除」的第一现场）。
+          # =========================================================
+          # 强制包清单：必须在最后一次 make defconfig 之前写入 .config，
+          # 由 kconfig 一次性解析依赖与符号；defconfig 之后不再手改 .config，
+          # 否则编译起步会报 "configuration is out of sync"。
+          # 源码树/feeds 里不存在的包会被 defconfig 静默剔除，交给下方
+          # MISSING / OPT_MISS 校验如实上报，而不是事后把 =y 写回 .config。
+          # =========================================================
+          # xray-core / sing-box 不在强制清单：
+          #   - sing-box 不是 SSR Plus+ 的后端依赖，helloworld feed 也不提供；
+          #   - xray-core 由 luci-app-ssr-plus 的 INCLUDE_Xray 条件依赖在 defconfig
+          #     时自动带入，单独强制 =y 属冗余，缺依赖时还会被静默剔除。
+          FORCED_PKGS="zoneinfo-asia libffi iw luci-app-airoha-npu luci-app-pon-status luci-app-natmode firewall4 kmod-nft-fullcone luci-mod-status airoha-ponctl jsonfilter rpcd-mod-file luci-app-ssr-plus luci-app-iptv luci-i18n-iptv-zh-cn nlbwmon luci-app-nlbwmon luci-i18n-nlbwmon-zh-cn luci-lib-chartjs mesh11sd"
+          echo "🔒 写入强制包清单（defconfig 前，幂等先删后加）..."
+          for pkg in $FORCED_PKGS; do
+            sed -i "/^CONFIG_PACKAGE_${pkg}[= ]/d; /^# CONFIG_PACKAGE_${pkg} is not set/d" .config 2>/dev/null || true
+            echo "CONFIG_PACKAGE_$pkg=y" >> .config
+          done
+
+          # ccache 开关同样在最后一次 defconfig 之前写入：rules.mk 直接解析
+          # CONFIG_CCACHE，但提前写入选定项由 kconfig 一并展开，避免 defconfig
+          # 之后再改 .config 触发 out-of-sync。
+          if [ "${USE_CCACHE}" = "true" ]; then
+            sed -i '/^CONFIG_CCACHE=/d; /^# CONFIG_CCACHE is not set/d' .config
+            echo 'CONFIG_CCACHE=y' >> .config
+          fi
+
           S="$GITHUB_WORKSPACE/scripts/defconfig.sh"
           [ -f "$S" ] || { echo "::error::缺 $S"; exit 1; }
           dos2unix "$S" 2>/dev/null || true
           bash "$S" "$PWD"
 
           # =========================================================
-          # defconfig 之后再强制追加一次（幂等，先删后加）。
-          # 原因：源码树里不存在的包会被 defconfig 静默标为 is not set，
-          # 上面 Configure 里的强制追加被这次 defconfig 冲掉了。这里补回，
-          # 保证随后 MISSING / OPT_MISS 校验看到的就是最终 .config。
+          # 强制清单剔除诊断（非阻断，只警告不 exit）：被 defconfig 静默
+          # 剔除的项如实提示，区分「未索引（clone/拷贝/feed 缺失）」与
+          # 「已索引被剔（依赖/条件不满足）」并打印 Depends，便于首跑定位。
+          # PON 核心链路与状态插件另有 MISSING / OPT_MISS 硬校验。
           # =========================================================
-          echo "🔒 defconfig 后补一次强制配置（幂等）..."
-          for pkg in luci-app-airoha-npu luci-app-pon-status luci-app-natmode \
-                     firewall4 kmod-nft-fullcone luci-mod-status airoha-ponctl \
-                     jsonfilter rpcd-mod-file luci-app-ssr-plus xray-core sing-box \
-                     luci-app-iptv luci-i18n-iptv-zh-cn \
-                     nlbwmon luci-app-nlbwmon luci-i18n-nlbwmon-zh-cn luci-lib-chartjs \
-                     mesh11sd; do
-            sed -i "/CONFIG_PACKAGE_$pkg[= ]/d" .config 2>/dev/null || true
-            echo "CONFIG_PACKAGE_$pkg=y" >> .config
+          for pkg in $FORCED_PKGS; do
+            if ! grep -q "^CONFIG_PACKAGE_${pkg}=y" .config; then
+              if grep -qx "Package: ${pkg}" tmp/.packageinfo 2>/dev/null; then
+                echo "::warning::${pkg} 被 defconfig 剔除（已索引，依赖/条件不满足）"
+                echo "  Depends: $(grep -A20 "^Package: ${pkg}\$" tmp/.packageinfo 2>/dev/null | grep -m1 '^Depends:' || echo '(无 Depends 行)')"
+              else
+                echo "::warning::${pkg} 未进入包索引（clone/拷贝/feed 缺失）"
+              fi
+            fi
           done
 
           # =========================================================
@@ -843,18 +831,26 @@ jobs:
             if ! grep -q "^CONFIG_PACKAGE_${p}=y" .config; then
               OPT_MISS="$OPT_MISS $p"
               echo "::warning::${p} 在 defconfig 后未启用"
+              # 先区分两类根因：
+              #   A) 未进入 tmp/.packageinfo —— 包没被索引（clone/拷贝/feed 问题）；
+              #   B) 已索引但被 defconfig 剔除 —— 依赖或条件不满足。
+              if grep -qx "Package: ${p}" tmp/.packageinfo 2>/dev/null; then
+                echo "  分类: 已索引但被 defconfig 剔除（依赖/条件不满足）"
+                echo "  Depends: $(grep -A20 "^Package: ${p}\$" tmp/.packageinfo 2>/dev/null | grep -m1 '^Depends:' || echo '(无 Depends 行)')"
+              else
+                echo "  分类: 未进入包索引（clone/拷贝/feed 缺失）"
+              fi
               echo "  --- 诊断 ---"
               echo "  1) 包目录: $([ -d "package/custom/${p}" ] && echo '存在' || echo '不存在')"
               echo "  2) feeds 链接: $([ -e "package/feeds/custom/${p}" ] && echo '存在' || echo '不存在')"
               echo "  3) .packageinfo 记录: $(grep -c "Package: ${p}\$" tmp/.packageinfo 2>/dev/null || echo 0)"
               echo "  4) feeds.conf 中 custom: $(grep -cE '^src-link[[:space:]]+custom' feeds.conf.default 2>/dev/null || echo 0)"
-              # 直接查询 buildroot 是否认识这个包
               echo "  5) 包符号探测:"
               grep -A3 "^Package: ${p}\$" tmp/.packageinfo 2>/dev/null | head -6 || echo "     (无记录)"
             fi
           done
           if [ -n "$OPT_MISS" ]; then
-            echo "::error::状态插件缺失:$OPT_MISS 请检查 diy-part1.sh 的 clone / 拷贝是否成功"
+            echo "::error::状态插件缺失:$OPT_MISS 见上方分类：未索引 → 检查 diy-part1.sh 的 clone/拷贝/feed；已索引被剔 → 检查依赖/条件"
             exit 1
           fi
           echo "✅ 状态插件校验通过"
@@ -1123,18 +1119,11 @@ jobs:
         run: |
           cd "$BUILD_ROOT/openwrt"
 
-          # 1) 确保 .config 里有 CONFIG_CCACHE=y（rules.mk 据此启用 ccache）
-          #
-          # ⚠ 这里【不】跑 make defconfig：
-          #   1) rules.mk 是直接解析 .config 里的 CONFIG_CCACHE，不需要 kconfig 展开；
-          #   2) 步骤 10 的 Validate 已完成最后一次 defconfig；这里再跑一次会把
-          #      diy-part2.sh 之后写进 .config 的选择重新展开一遍，正是那条
-          #      注释要避免的事；
-          #   3) 原来那行还带 `|| true`，连失败都看不见（同 P0：管道/短路吞错）。
-          sed -i '/^CONFIG_CCACHE=/d; /^# CONFIG_CCACHE is not set/d' .config
-          echo 'CONFIG_CCACHE=y' >> .config
+          # CONFIG_CCACHE=y 已在 Validate 步骤最后一次 defconfig 之前按
+          # USE_CCACHE 写入 .config；这里只确认/补装 ccache 二进制，不再回写
+          # .config。仅二进制不可用的失败路径才关闭 ccache。
 
-          # 2) 缺二进制就补装（ccache 依赖 xxhash → cmake，首次会多花几分钟）
+          # 缺二进制就补装（ccache 依赖 xxhash → cmake，首次会多花几分钟）
           if [ ! -x staging_dir/host/bin/ccache ]; then
             echo "ccache 缺失，补装 tools/ccache ..."
             if ! make tools/ccache/install -j"$(nproc)"; then
@@ -1143,7 +1132,7 @@ jobs:
             fi
           fi
 
-          # 3) 最终确认：仍然不可用就彻底关掉，避免 Error 127
+          # 最终确认：仍然不可用就彻底关掉，避免 Error 127
           if ! grep -q '^CONFIG_CCACHE=y' .config; then
             echo "ccache: 已关闭"
           elif [ -x staging_dir/host/bin/ccache ]; then
