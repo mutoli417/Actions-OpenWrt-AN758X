@@ -336,10 +336,11 @@ if [ -f ".config" ]; then
 fi
 
 # 修复 ssr-plus 依赖 kcptun-client 缺失问题
+# Makefile 中为条件依赖写法：+PACKAGE_$(PKG_NAME)_INCLUDE_Kcptun:kcptun-client
 echo "🔧 修复 ssr-plus 依赖 kcptun-client 缺失..."
 SSR_MAKEFILE="package/feeds/helloworld/luci-app-ssr-plus/Makefile"
 if [ -f "$SSR_MAKEFILE" ]; then
-  sed -i 's/+kcptun-client//g' "$SSR_MAKEFILE" 2>/dev/null || true
+  sed -i -e 's/+PACKAGE_[^:[:space:]]*:kcptun-client//g' -e 's/+kcptun-client//g' "$SSR_MAKEFILE" 2>/dev/null || true
   echo "✅ ssr-plus Makefile 已移除 kcptun-client 依赖"
 fi
 

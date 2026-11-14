@@ -1,208 +1,137 @@
-# PonWrt CI — Airoha AN758x PON 云编译
+# B 仓库配置追加顺序根因规范补丁
 
-基于 P3TERX `Actions-OpenWrt` 模板重构，源码指向 [pbs05/ponwrt](https://github.com/pbs05/ponwrt)（默认分支 `master`）。
-产出 AN7581 / AN7583 PON 光猫的 OpenWrt 固件，带机型选择、磁盘释放和滚动构建缓存。
+- 仓库：`mutoli417/Actions-OpenWrt-AN758X`（默认分支 `main`）
+- 基线提交：`ed560850dbe58f1dd157af94df58a201e811fafc`
+- 改动文件：`.github/workflows/build-ponwrt.yml`、`diy-part2.sh`
+- 触发现象：编译起步报 `WARNING: your configuration is out of sync. Please run make menuconfig, oldconfig or defconfig!`
 
-## 快速开始
+## 根因
 
-免费 runner 单次上限 6 小时（job 350 分钟），首次全量编译（工具链 + 内核 + 全包）大概率超时，按这个顺序跑：
+工作流有两次 `make defconfig`：
 
-1. **Warm Build Cache** → `soc=an7581和an7583`、`prebuilt_host=预编译`，把工具链缓存建起来
-2. **Build PonWrt** → 选 `soc` / `profile` → `scope=firmware` 出固件
-3. 仍然超时：把 `configs/*.config` 里不需要的 luci-app / 语言包删掉再提交
+1. Configure 步骤（基线 L683）第一次展开；
+2. Validate 步骤经 `scripts/defconfig.sh`（基线 L800）第二次、也就是最后一次展开。
 
-> 不预热也能直接跑 `firmware`——缓存是滚动式的，第一次跑完会自动存下工具链。预热只是给怕超时的人用的。
+第二次 defconfig 之后，工作流又在基线 L808–817 把强制包先删后加写回 `.config`，
+此后没有再跑 kconfig 同步。编译起步 `make world` 检测到 `.config` 比 `auto.conf`
+新，便打出 out-of-sync 警告。该告警非致命，编译会继续，但属于配置顺序不规范。
 
-## 输入项
+## 规范做法（本补丁）
 
-### `build-ponwrt.yml`
+原则：所有强制选择必须在**最后一次 defconfig 之前**写入 `.config`，由 kconfig
+一次性解析依赖与符号；defconfig 之后不再手改 `.config`。
 
-| 输入 | 取值 | 说明 |
-|---|---|---|
-| `source` | `pbs05/ponwrt` / `fork` | 编译哪个源码仓库。**必须和缓存预热时选的一致**，否则前缀对不上 |
-| `branch` | 默认 `master` | |
-| `soc` | `an7581` / `an7583` | |
-| `profile` | 见下方机型表，`all` = 全机型 | 写错会在 `Validate configuration` 直接报错退出，不会静默全编 |
-| `scope` | `firmware` / `toolchain-only` | 后者只建工具链缓存，不出固件、不发 Release |
-| `prebuilt_host` | `true`（默认）/ `false` | `true` 用 runner 的 Go/Rust/LLVM，快 1.5~2.5 小时；`false` 全部从源码编，产物可复现 |
-| `ignore_cache` | `false` / `true` | 跳过缓存恢复强制重编（仍会存新一代） |
-| `upload_release` | `true` / `false` | `false` 只留 Artifact |
-| `opt_arm64ce` / `opt_chacha` / `opt_eip93` | `0` / `1` | 加密加速，见文末 |
+### 改动 1：Configure 步骤删除第一次 defconfig 后的强制追加
 
-### 四个工作流
+移除基线 L685–713、L726–731 的四组事后追加：
 
-| 工作流 | 触发 | 作用 |
-|---|---|---|
-| `build-ponwrt.yml` | 手动 | 恢复缓存 → 编译 → 存缓存 → 轮换旧代 |
-| `warm-cache.yml` | 手动 / 每周一 03:17 | 预热。`soc` 和 `prebuilt_host` 都是三选一，两个都选「和」的选项 = 4 个 job 并行 |
-| `cache-keepalive.yml` | 每 3 天 | 逐条真实恢复，避开 `actions/cache` 的 7 天未访问回收 |
-| `cache-clean.yml` | 手动 / 每周一 04:20 | `rollover` 每族留最新一代 / `backup` 只清 Release 备份 / `all` 全删 |
+- `zoneinfo-asia libffi iw` 安全网；
+- `luci-app-airoha-npu luci-app-pon-status luci-app-natmode`；
+- `firewall4 kmod-nft-fullcone luci-mod-status airoha-ponctl jsonfilter rpcd-mod-file`；
+- `luci-app-ssr-plus xray-core sing-box`；
+- `luci-app-iptv luci-i18n-iptv-zh-cn`。
 
-## 支持的机型
+Argon 菜单隐藏、版本信息搜索等非 `.config` 操作保留不动。
 
-| SoC | profile |
-|---|---|
-| AN7581 | `fiberhome_hg5382a` `fiberhome_hg5585f-ct` `fiberhome_hg5585f-cu` `gemtek_xg2010g` `nokia_xg-040g-md-ubi` `nokia_xg-040g-tf-ubi` `unionman_ung00a` `znxt_zn504xg-d` `znxt_zn515xg-d` `h3c_hm2004-du`※ |
-| AN7583 | `nokia_xg-040g-mf` `nokia_xg-040g-mf-ubi` |
+### 改动 2：Validate 步骤在最后一次 defconfig 之前写入合并清单
 
-※ `h3c_hm2004-du` 额外依赖私有仓库 `openwrt-fttr`（FTTR 驱动 / 控制端 / FPGA 固件）与 `luci-app-fttr`，缺凭证时 `diy-part1.sh` 会直接报错退出。
-
-## 插件开关（`diy-part1.sh`）
-
-全部默认开启，开关与 `configs/an7581.config` / `an7583.config` 里的 `=y` 一一对应：
-
-| 开关 | 包 | 备注 |
-|---|---|---|
-| `ADD_AIROHA_NPU` | `luci-app-airoha-npu` | NPU 卸载 / CPU 频率 / Frame Engine / PPE 流表 |
-| `ADD_LUCI_APP` | `luci-app-natmode`、`luci-app-pon-status` | NAT 类型三选一、PON 光模块卡片 |
-| `ADD_FLUENT` | `luci-theme-fluent` | 与 `argon` / `bootstrap` 可共存 |
-| `ADD_PASSWALL` | `luci-app-passwall` + `xray-core` / `sing-box` | 新版 passwall 把内核做成按需安装，config 里另开了两个 feeds 现成的 |
-| `ADD_OPENCLASH` | `luci-app-openclash` | ⚠ 拖 Ruby 进构建，首次 +20~40 分钟 |
-| `ADD_MOSDNS` | `luci-app-mosdns` | 本体用 feeds 的 `mosdns` |
-| `ADD_SMARTDNS` | `luci-app-smartdns` | 本体用 feeds 的 `smartdns` |
-| `ADD_TAILSCALE` | `luci-app-tailscale` | 本体用 feeds 的 `tailscale` |
-| `ADD_LUCKY` | `luci-app-lucky` | 含 `lucky` 本体 |
-| `ADD_OPENLIST` | `luci-app-openlist2` | 含 `openlist2` 本体 |
-| `ADD_EASYTIER` | `luci-app-easytier` + `easytier` | 本体是 Rust 包，编译较慢 |
-| `ADD_POWEROFF` / `ADD_OWQ_WOL` / `ADD_WATCHDOG` / `ADD_TASKPLAN` | 同名 `luci-app-*` | |
-| `ADD_OAF` | `luci-app-oaf` + `appfilter` / `kmod-oaf` | 含内核模块 |
-
-**要关掉某个插件，改两处**：脚本里 `ADD_xxx=false`，**并且**把两个通用 config 里对应的
-`CONFIG_PACKAGE_xxx=y` 删掉（或改成 `# ...is not set`）。只改一处会不一致：
-只关脚本 → `make defconfig` 把 `=y` 静默剔除；只关 config → 白 clone 一个仓库。
-
-**四个「只用 feeds」的包**（`MOSDNS` / `SMARTDNS` / `PASSWALL` / `TAILSCALE`）：它们的本体
-（`mosdns` / `smartdns` / `xray-core` / `sing-box` / `tailscale`）feeds 里已有同名包，
-第三方源再拉一份会让索引里出现两个同名 `Package`，`package-metadata` 按扫描顺序挑一个、
-行为不可预期。所以脚本只拷 luci 前端，本体一律用 feeds 的。
-
-`ADD_FTTR` 及其子开关只在 `h3c_hm2004-du` 下生效，其余机型自动跳过。
-
-## 构建缓存（移植自 VIKINGYFY/OpenWRT-CI）
-
-一份缓存 = 三个目录：
+在 `bash scripts/defconfig.sh` 之前插入合并后的强制包清单（幂等：先删旧行/
+`is not set` 行，再追加 `=y`），共 20 个包：
 
 ```
-staging_dir/host*      host 工具 + hostpkg（go / python 在这）
-staging_dir/tool*      交叉编译器
-.ccache                编译对象缓存
+zoneinfo-asia libffi iw
+luci-app-airoha-npu luci-app-pon-status luci-app-natmode
+firewall4 kmod-nft-fullcone luci-mod-status airoha-ponctl jsonfilter rpcd-mod-file
+luci-app-ssr-plus
+luci-app-iptv luci-i18n-iptv-zh-cn
+nlbwmon luci-app-nlbwmon luci-i18n-nlbwmon-zh-cn luci-lib-chartjs mesh11sd
 ```
 
-**tools / toolchain 会不会重编，取决于 `staging_dir` 里的 compile 戳，不取决于缓存里
-有没有 `build_dir`。** `make world` 的 `prepare` 依赖
-`staging_dir/host/stamp/.tools_compile_<flags>` 和 `staging_dir/toolchain-*/stamp/.toolchain_compile`，
-这两个戳存在且比源码树新，`tools/compile` 与 `toolchain/compile` 就整段跳过。
+> `xray-core` / `sing-box` 不进强制清单：
+> - sing-box 不是 SSR Plus+ 的后端依赖，helloworld feed 也不提供；
+> - xray-core 由 `luci-app-ssr-plus` 的 `INCLUDE_Xray` 条件依赖在 defconfig 时
+>   自动带入，单独强制 `=y` 属冗余，缺依赖时还会被静默剔除。
 
-**但 host 包（golang / rust / python3）是另一回事。** 它们有四个戳，被拆在两处：
-`staging_dir/hostpkg/stamp/.<pkg>_installed` 跟着缓存走，而
-`build_dir/host/<pkg>/.built`、`.configured`、`.prepared_<md5>` 不在缓存路径里。
-依赖链是 `installed ← built ← configured ← prepared`，缺了 built 这一层，make 就认为没编过，
-整条链重做。**这就是 source 模式比 prebuilt 慢 20~40 分钟、多写 13~14 GB 的原因**——
-golang 和 rust 每轮都在从源码自举。
+### 改动 3：删除 Validate 步骤 defconfig 之后的追加循环
 
-所以 source 模式在编译结束时会把这三个戳单独冻一份到
-`staging_dir/host/.builddir-stamps/`（只冻戳，不冻内容：100 来个包 × 3 个空文件，
-压缩后不到 10 KB），下一轮 `prepare` 原样还原，mtime 保持不变。
-**prebuilt 模式不冻**——那里的 go/rust 是指向 runner 的符号链接，换镜像后可能悬空，
-宁可让同一条链重跑一遍自愈（`rust-prebuilt.mk` 已把 Prepare/Configure/Compile 置空，只花几秒）。
+移除基线 L802–817 的「defconfig 后补一次强制配置」循环，并同步改写步骤头注释。
 
-**精确命中 = 这份缓存就是当前这个提交编出来的**，两条通道都算：`actions/cache` 的
-`cache-hit=true`，或 Release 资产名去掉 `.tzst` 后与本次 key 完全相同。只有精确命中时
-`prepare` 才保留这两个戳；前缀回退、或 Release 取到的是旧代，都说明源码已变，脚本会删掉
-它们迫使 make 重编（约 26 分钟，ccache 会加速）。当前提交通常在第一次构建时付这 26 分钟，
-之后同提交重跑都是 0 分钟。
+### 改动 4：ccache 选择前移到最后一次 defconfig 之前
 
-> 冻进去的 `build_dir` 戳不会误跳编译：`.prepared` 的文件名里带着包源码目录的内容 MD5
-> （`PKG_FILES_MD5`），上游一改源码戳名就对不上，make 自然重建。target 侧的戳则完全不在
-> 缓存里，所以固件包每轮照常重编。
+`CONFIG_CCACHE` 是 kconfig 符号（`config/Config-devel.in`，挂在 `DEVEL` 菜单下）。
+两个 SoC 基座 config 均已 `CONFIG_DEVEL=y`，符号有效。补丁在 Validate 步骤、
+defconfig 之前按 `USE_CCACHE=true` 写入 `CONFIG_CCACHE=y`；后续 `Setup ccache`
+步骤只负责确认/补装 ccache 二进制，不再回写 `.config`，仅在二进制补装失败的
+错误路径才把 ccache 关闭。
 
-| 通道 | 介质 | 特点 |
-|---|---|---|
-| ① 快通道 | `actions/cache` | 秒级，但 **7 天无访问即回收** |
-| ② 备份通道 | Release `cache-backup` 资产 | 慢（~1 GB），**永不过期** |
+### 改动 5：剔除诊断区分两类根因（OPT_MISS 硬校验 + 强制清单非阻断）
 
-恢复 ①→②，保存时两条都写（② 失败只 warning）。key 规则：
+- `OPT_MISS` 状态插件被剔除时，校验先查 `tmp/.packageinfo`：
+  - **未进入包索引**：clone/拷贝/feed 缺失（对照 diy-part1.sh）；
+  - **已索引但被 defconfig 剔除**：依赖或条件不满足，并打印该包的 `Depends:` 行。
+  报错文案同步指向上述分类，不再一律归结为 clone 失败。
+- 强制清单其余包另做一轮**非阻断**检查：被 defconfig 剔除时只打 `::warning::`，
+  同样区分「未索引 / 已索引被剔」并打印 Depends，便于首跑定位，不 `exit 1`。
 
-| | key |
-|---|---|
-| 写入 | `ponwrt-<源站>-<分支>-<SoC>-<prebuilt\|source>-<上游提交号>` |
-| 恢复 | 同上前缀 + `-`（**前缀回退**） |
+### 改动 6：剥除 SSR Plus+ 的 kcptun-client 条件依赖（消 1 条 WARNING）
 
-前缀不含配置、机型、diy 脚本——改这些不会让缓存失效；上游一提交就换一代，靠 `restore-keys` 回退到最近一代。旧代由 `cache-rollover` job 删掉，保证每个前缀只留一份。
+首跑 Validate 的 11 条 WARNING 中，1 条为：
 
-**恢复后必须做三件事**（`scripts/pwrt-cache.sh prepare`），少一件就等于白命中：touch 非 target 的 stamp、写 `tmp/.build`、touch 目录本身。
+```
+luci-app-ssr-plus/Makefile 依赖 'kcptun-client'（不存在）
+```
 
-**dl 缓存**（源码包，2~5 GB）单独一条，key 按周滚动 `ponwrt-dl-<源站 slug>-<分支>-<YYYYWW>`（`pbs05/ponwrt` → `pbs05-ponwrt`，与工具链 key 同一套规则）。保存在 `make download` 之后、编译之前——350 分钟一到 job 直接 cancel，放最后用 `always()` 也来不及跑。
+根因：`diy-part2.sh` 原正则 `s/+kcptun-client//g` 只匹配字面 `+kcptun-client`，
+而 Makefile 里是**条件依赖**写法：
 
-**两种 host 模式不共用缓存**：`HOST_MODE` 进前缀。prebuilt 在 `staging_dir` 里留的是指向 runner 的符号链接，source 留的是真二进制，混用会让 make 误判「已安装」并在编译期报一个完全对不上的错。**warm-cache 必须和主流程选同一个模式**，否则预热白跑。
+```
++PACKAGE_$(PKG_NAME)_INCLUDE_Kcptun:kcptun-client
+```
 
-**rust 包的离线限制**：`h3c-fttr-tools` 的 Makefile 用 `cargo install --locked --frozen`，`--frozen` 禁止联网、只认 `dl/cargo` 里已有的 crate。`scripts/patch-cargo-offline.sh` 把 `--frozen` / `--offline` 摘掉，`--locked` 保留（版本仍锁死）。
-
-## 客制化
-
-| 位置 | 做了什么 |
-|---|---|
-| `files/sbin/cpuusage` + `scripts/patch-luci-cpuusage.sh` | 概览页 CPU 行改为 `USR: 2% SYS: 1% · CPU0 3% CPU1 0%…`（两次 `/proc/stat` 采差值，USR=`user+nice`、SYS=`system+irq+softirq`）。补丁只换 `popen()` 里一个命令字符串，前端和 ACL 都不动；任一环节失败只 warning，构建不受影响 |
-| `files/sbin/tempinfo` | 概览页温度行：CPU / WiFi / PON 三个温度。顶部 `SHOW_PON_OPTICS=1` 可附带收发光/电流/电压（默认 0，因为 `luci-app-pon-status` 卡片已经完整展示，重复） |
-| `diy-part2.sh` | 默认时区 `Asia/Shanghai`、5G 国家码 `CN` / 信道 `auto` / 频宽 `HE160`（不支持时回落到 `HE80`）、固件版本后缀追加作者与构建时间 |
-| `files/etc/uci-defaults/` | 首启强制刷时区与无线参数的兜底脚本 |
-
-## NPU 固件
-
-NPU 是 Airoha SoC 里的 RISC-V 核，host 侧驱动随内核编出，按固定名字找两个镜像：
-
-| 镜像 | 文件名 | 上限 |
-|---|---|---|
-| rv32（text+rodata） | `airoha/en7581_npu_rv32.bin`（AN7583 为 `an7583_*`） | 2 MiB |
-| data | `airoha/en7581_npu_data.bin` | 64 KiB |
-
-由 ponwrt 自带的 linux-firmware 提供，在 `configs/<机型>.config` 写 `CONFIG_PACKAGE_airoha-en7581-npu-firmware=y` 即装进 rootfs。工作流不介入固件生成——要换就改这一行。
+正则匹配不到 `:kcptun-client` 片段，剥除失效。补丁把 sed 改为同时剥条件片段与字面形式：
 
 ```sh
-dmesg | grep -i npu           # probe 时打 fw version
-ls -l /lib/firmware/airoha/   # 两个 bin 在位
+sed -i -e 's/+PACKAGE_[^:[:space:]]*:kcptun-client//g' \
+       -e 's/+kcptun-client//g' "$SSR_MAKEFILE"
 ```
 
-缺文件或名字不符 → `-ENOENT` → 映射成 `-EPROBE_DEFER`，NPU 一直不绑定（`deferred probe pending` 里能看到具体文件名）；超限 → `-E2BIG`。
+kcptun 后端默认关闭（`INCLUDE_Kcptun=n`），剥除该条件依赖不影响 SSR 本体与其他后端。
 
-## 加密加速（可选）
+### 改动 7：禁用未使用的 video feed（消 10 条 qt6 WARNING）
 
-| 开关 | 建议 | 适用 |
-|---|---|---|
-| `opt_arm64ce` | 改 `1` | IPSec / OpenVPN / TLS / dm-crypt，几乎总是开 |
-| `opt_chacha` | 改 `1` | 跑 Xray / sing-box / WireGuard |
-| `opt_eip93` | 保持 `0` | 只有大块 IPSec / 大文件 TLS 才有收益 |
+首跑其余 10 条为 `video/qt6quick`、`video/qt6svg` 依赖 `qt6base-*`（不存在）。
+源码 `feeds.conf.default` 自带 `src-git video https://github.com/openwrt/video.git`，
+该 feed 全是 GUI / 游戏 / 多媒体库（wayland、gtk、qt5/qt6、mesa、sdl、games），
+本固件为无头 PON 路由，全部机型配置与强制清单均未引用其中任何包。
 
-**AN7581 和 AN7583 不一样**：AN7581 的 `/proc/cpuinfo` 里没有 `aes`，`/proc/crypto` 只有 `aes-generic`，单核 AES-128-GCM 约 32 MB/s，只能走 NEON 位切片（`AES_ARM64_BS`）；AN7583 有 `aes pmull sha1 sha2`，同样测试约 548 MB/s，可以走 Crypto Extensions。脚本读 `.config` 自动判断，不用手动切。
-
-**EIP93 是个陷阱**：AN7581 确实内置（`crypto@1e004000`），但实测 AES 要 ≥512 字节才快过软件，MD5/SHA1/SHA2 在所有尺寸下都是软件更快，代理流量开着只会更慢。
-
-验证：
+补丁在「Update & install feeds」步骤、`feeds update -a` 之前，注释掉 video feed 行：
 
 ```sh
-grep -ao 'aes\|pmull\|sha1\|sha2' /proc/cpuinfo | sort -u   # AN7581 不会有 aes
-cat /proc/crypto | grep -E '^name|^driver|^priority'
-openssl speed -evp aes-128-gcm
-openssl speed -evp chacha20-poly1305
+sed -i 's/^[[:space:]]*src-git video[[:space:]]/#&/' feeds.conf.default
 ```
 
-> `CONFIG_CRYPTO_*` 是**内核编译符号**，必须写进 `target/linux/airoha/an7581/config-<kver>`。写进顶层 `.config` 会被 target config 覆盖——看起来配上了，实际不生效。
+这样不再克隆该大仓，也从根上消除 qt6quick/qt6svg 缺 qt6base 的告警；
+`packages / luci / routing / telephony / pon_drivers / pon_userspace` 等其他 feed 不受影响。
 
-## 排错
+## 校验口径
 
-| 症状 | 先看哪里 |
-|---|---|
-| `defconfig` 失败 | 日志里 `make defconfig` 那段的尾部 60 行 + 根因提示（`scripts/defconfig.sh` 输出） |
-| 关键包「未启用，检查 feeds」 | 多数是上一步 defconfig 失败的连带；独立出现时查 `tmp/.packageinfo` 里有没有该包 |
-| `Failed to download` / 编译期报缺 crate | `make download` 三次都失败会直接 error 退出，去那段输出搜 `ERROR:` |
-| 缓存「命中」却仍然全量重编 | `prepare` 那步的三件事是否都做了；`Build host go/rust from source` 的 warning |
-| 缓存永远 miss | `source` / `branch` / `soc` / `prebuilt_host` 四项是否和预热时一致 |
-| `artifacts` 上传失败 | Artifact 存储配额（默认保留 90 天，几份固件就可能超） |
-| NPU 不绑定 | `dmesg \| grep -i npu`、`/lib/firmware/airoha/` 里的文件名和大小 |
+- `MISSING`（PON 核心链路，缺包直接 `exit 1`）与 `OPT_MISS`（状态插件，缺包报错）
+  仍在最后一次 defconfig 之后读取 `.config`。
+- 规范后：源码树/feeds 里不存在、或依赖不满足而被 defconfig 静默剔除的包，
+  会被上述校验如实上报，而不是事后把 `=y` 写回 `.config` 让校验「看起来通过」。
+- 基座依赖已覆盖：`luci-base`、`rpcd-mod-file`、`jsonfilter`、`firewall4`、
+  `kmod-nft-fullcone`、`luci-mod-status`、`nftables-json`、`uhttpd` 等均在基座
+  config 中启用；diy-part1.sh 已把三个自定义插件 Makefile 里的多余依赖去掉。
 
-## 已知限制
+## 注意
 
-- 只有 `scope=firmware` 且编译成功才发 Release；`toolchain-only` 不发，空固件目录会跳过。
-- Release tag 固定为 `<机型>-<分支>`，每次覆盖，所以每个机型只有一份固件，不是「保留最近 N 份」。
-- NPU 只在三层路由模式生效，纯 AP 桥接时整机吞吐会掉到 2000 Mbps 左右。
-- `repository_dispatch` 触发时所有 choice 输入都是空，走的是各 env 的回退值。
+1. **建议试编译验证**：规范前事后追加只保证 grep 看到 `=y`，并不保证包真正编入；
+   规范后 defconfig 会按真实依赖解析。首次按本补丁构建时，留意 Validate 的
+   `MISSING` / `OPT_MISS`、强制清单非阻断警告与 defconfig WARNING 汇总，确认
+   20 个强制包均被接受。
+2. **xray-core / sing-box**：不进强制清单。sing-box 与 SSR Plus+ 无依赖关系、
+   helloworld feed 也不提供；xray-core 由 SSR Plus+ 的 `INCLUDE_Xray` 条件依赖
+   自动带入。若首跑诊断显示 xray-core 被剔，按其 Depends 行补依赖即可；二者均不
+   在 `MISSING`/`OPT_MISS` 阻断清单内，不打断构建。
+3. 本补丁基于远端 `ed560850` 基线生成，仅含本次顺序规范涉及的工作流文件；
+   此前本地另存的未推送改动不在本包内。
