@@ -504,11 +504,12 @@ jobs:
           if [ -n "${FEEDS_CONF}" ] && [ -e "$GITHUB_WORKSPACE/${FEEDS_CONF}" ]; then
             cp "$GITHUB_WORKSPACE/${FEEDS_CONF}" feeds.conf.default
           fi
-          # 本固件为无头 PON 路由，不使用 video feed（wayland/gtk/qt5/qt6/mesa/games 等 GUI 多媒体包）；
-          # 禁用后不再克隆该大仓，并消除 qt6quick/qt6svg 缺 qt6base 依赖的 defconfig WARNING。
-          sed -i 's/^[[:space:]]*src-git video[[:space:]]/#&/' feeds.conf.default
           ./scripts/feeds update -a
           ./scripts/feeds install -a
+          # 无头 PON 路由不用 qt6 GUI；video feed 保留（mesa/wayland/graphene 由它提供，
+          # packages 的 gst1-plugins-base 依赖这些库），只摘掉依赖 qt6base 子包的
+          # qt6quick / qt6svg 两个目录，消除 defconfig 缺依赖 WARNING。
+          rm -rf package/feeds/video/qt6quick package/feeds/video/qt6svg
 
       # =========================================================
       # 5. diy-part1.sh —— 拉取可选插件
