@@ -495,6 +495,25 @@ jobs:
             ponwrt-dl-${{ env.SOURCE }}-${{ env.REPO_BRANCH }}-
 
       # =========================================================
+      # 3.9 裁剪确认用不到的 overlay 可选包
+      #   均为未编入的叶子/门控包，基座 defconfig 全栈 not set，无启用包反向依赖；
+      #   逐项依赖核对见《可选包裁剪核对方案.md》。目录来自克隆源码，feeds 重装不重建；
+      #   必须在 feeds install -a 之前，扫描器才看不到缺依赖的 Makefile。
+      # =========================================================
+      - name: Trim unused optional overlay packages
+        run: |
+          cd "$BUILD_ROOT/openwrt"
+          rm -rf \
+            package/utils/audit \
+            package/emortal/autosamba \
+            package/utils/bluetooth-uart \
+            package/boot/kexec-tools \
+            package/network/services/lldpd \
+            package/utils/pcat-manager \
+            package/utils/policycoreutils \
+            2>/dev/null || true
+
+      # =========================================================
       # 4. 更新并安装 Feeds
       # =========================================================
       - name: Update & install feeds
