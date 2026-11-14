@@ -97,21 +97,22 @@ sed -i -e 's/+PACKAGE_[^:[:space:]]*:kcptun-client//g' \
 
 kcptun 后端默认关闭（`INCLUDE_Kcptun=n`），剥除该条件依赖不影响 SSR 本体与其他后端。
 
-### 改动 7：禁用未使用的 video feed（消 10 条 qt6 WARNING）
+### 改动 7：摘除 qt6quick / qt6svg 目录（消 10 条 qt6 WARNING）
 
-首跑其余 10 条为 `video/qt6quick`、`video/qt6svg` 依赖 `qt6base-*`（不存在）。
-源码 `feeds.conf.default` 自带 `src-git video https://github.com/openwrt/video.git`，
-该 feed 全是 GUI / 游戏 / 多媒体库（wayland、gtk、qt5/qt6、mesa、sdl、games），
-本固件为无头 PON 路由，全部机型配置与强制清单均未引用其中任何包。
+首跑 10 条为 `video/qt6quick`、`video/qt6svg` 依赖 `qt6base-*`（不存在）。
+源码 `feeds.conf.default` 自带 `src-git video https://github.com/openwrt/video.git`。
+该 feed 虽全是 GUI / 游戏 / 多媒体库（wayland、gtk、qt5/qt6、mesa、sdl、games），
+但 `packages` 的 `gst1-plugins-base` 依赖 `libmesa / libwayland / libgraphene`，
+这三个库正由 video feed 提供，因此**保留 feed**，只摘掉缺 qt6base 子包的 quick/svg 两个目录。
 
-补丁在「Update & install feeds」步骤、`feeds update -a` 之前，注释掉 video feed 行：
+补丁在「Update & install feeds」步骤、`feeds install -a` 之后删除对应索引目录：
 
 ```sh
-sed -i 's/^[[:space:]]*src-git video[[:space:]]/#&/' feeds.conf.default
+rm -rf package/feeds/video/qt6quick package/feeds/video/qt6svg
 ```
 
-这样不再克隆该大仓，也从根上消除 qt6quick/qt6svg 缺 qt6base 的告警；
-`packages / luci / routing / telephony / pon_drivers / pon_userspace` 等其他 feed 不受影响。
+这样 qt6quick/qt6svg 缺 qt6base 的告警从根上消除，同时 mesa/wayland/graphene 仍在，
+gst1-plugins-base 不再缺库；`packages / luci / routing / telephony / pon_drivers / pon_userspace` 等其他 feed 不受影响。
 
 ## 校验口径
 
