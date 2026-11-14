@@ -506,10 +506,6 @@ jobs:
           fi
           ./scripts/feeds update -a
           ./scripts/feeds install -a
-          # 无头 PON 路由不用 qt6 GUI；video feed 保留（mesa/wayland/graphene 由它提供，
-          # packages 的 gst1-plugins-base 依赖这些库），只摘掉依赖 qt6base 子包的
-          # qt6quick / qt6svg 两个目录，消除 defconfig 缺依赖 WARNING。
-          rm -rf package/feeds/video/qt6quick package/feeds/video/qt6svg
 
       # =========================================================
       # 5. diy-part1.sh —— 拉取可选插件
@@ -520,6 +516,18 @@ jobs:
           cd "$BUILD_ROOT/openwrt"
           chmod +x "$GITHUB_WORKSPACE/$DIY_P1_SH"
           "$GITHUB_WORKSPACE/$DIY_P1_SH"
+
+      # =========================================================
+      # 5.4 摘除 qt6quick / qt6svg 索引目录
+      #   必须在 diy-part1 之后：diy-part1 末尾还会再跑一次
+      #   `feeds install -a`，会把下面两个符号链接重建回来；
+      #   放在那次 install 之后摘除，defconfig 才看不到缺 qt6base 的包。
+      #   video feed 保留（mesa/wayland/graphene 由它提供，gst1-plugins-base 依赖）。
+      # =========================================================
+      - name: Drop qt6quick / qt6svg feed dirs
+        run: |
+          cd "$BUILD_ROOT/openwrt"
+          rm -rf package/feeds/video/qt6quick package/feeds/video/qt6svg
 
       # =========================================================
       # 5.5 放宽 rust 包的「禁止联网」（--frozen / --offline）
