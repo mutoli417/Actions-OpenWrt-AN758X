@@ -25,7 +25,9 @@
     | sub("-[0-9a-f]{40}$"; "")
     | sub("-[0-9]{6}$"; ""))
 | map(
-    (sort_by(.createdAt) | reverse) as $g
+    # B-L13: 按解析后的 Unix 时间戳排序，避免 createdAt 字符串格式/时区变化时
+    #   字典序排序把代际先后排错；解析失败回退原字符串。
+    (sort_by(.createdAt | (fromdateiso8601? // .)) | reverse) as $g
     | ($g | map(select(.key | endswith("-early") | not)) | first) as $keep
     | if $keep then ($g | map(select(.key != $keep.key)))
       else ($g | .[1:])

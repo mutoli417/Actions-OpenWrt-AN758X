@@ -126,8 +126,10 @@ if [ "${RUST_PIN_FEED:-0}" = "1" ]; then
     # 无论是不是刚装的，都要确认这个 toolchain 上有目标平台的 std
     rustup target add --toolchain "$FEED_VER" "$RUST_TARGET" >>"$REPORT" 2>&1 || true
     PIN_ROOT=$(rustup run "$FEED_VER" rustc --print sysroot 2>/dev/null || true)
+    # B-L3: 除 rustc 外，再校验 cargo（编译必需）与 rustdoc；缺任一关键件即视为 toolchain 不可用。
     if [ -n "$PIN_ROOT" ] && [ -d "$PIN_ROOT/lib/rustlib/$RUST_TARGET/lib" ] \
-       && [ -x "$PIN_ROOT/bin/rustc" ]; then
+       && [ -x "$PIN_ROOT/bin/rustc" ] && [ -x "$PIN_ROOT/bin/cargo" ] \
+       && [ -x "$PIN_ROOT/bin/rustdoc" ]; then
       RUST_TOOLCHAIN=$FEED_VER
       RUST_ROOT=$PIN_ROOT
       PIN_OK=1
@@ -194,7 +196,6 @@ export CI_HOSTBUILD='$(eval $(call HostBuild))'
 #   -i 原地模式下 i\ 命令会静默失效 —— 实测插入不进去且不报错。
 #   perl 的 \Q...\E 把整串当字面量，可靠得多。
 MARKER='include ./ci-prebuilt.mk'
-HOSTBUILD='$(eval $(call HostBuild))'
 
 perl -i -pe '
   BEGIN { $m = quotemeta($ENV{"CI_MARKER"}); $h = quotemeta($ENV{"CI_HOSTBUILD"}); }
@@ -206,10 +207,9 @@ if ! grep -Fxq "$MARKER" "$RUST_MAKEFILE"; then
   warn "Rust: 注入 ci-prebuilt.mk 失败，退回源码自举"
   exit 0
 fi
-# ⚠ 别把 $HOSTBUILD 直接放进带 $(...) 的字符串：
-#   它的内容是字面量 $(eval $(call HostBuild))，
-#   双引号里的 $(...) 会被 shell 当命令替换执行，
-#   直接报 "意外令牌附近语法错误 '('"（第147行就是这么炸的）。
+# ⚠ HostBuild 字面量 $(eval $(call HostBuild)) 必须经环境变量传给 perl，
+#   不能直接放进带 $(...) 的 shell 字符串：双引号里的 $(...) 会被 shell
+#   当命令替换执行，报 "意外令牌附近语法错误 '('"。
 log "注入: $MARKER（在 HostBuild 求值之前）"
 
 "$RUST_ROOT/bin/rustc" --version | tee -a "$REPORT"
