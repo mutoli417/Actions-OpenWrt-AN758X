@@ -504,6 +504,9 @@ jobs:
           if [ -n "${FEEDS_CONF}" ] && [ -e "$GITHUB_WORKSPACE/${FEEDS_CONF}" ]; then
             cp "$GITHUB_WORKSPACE/${FEEDS_CONF}" feeds.conf.default
           fi
+          # 本固件为无头 PON 路由，不使用 video feed（wayland/gtk/qt5/qt6/mesa/games 等 GUI 多媒体包）；
+          # 禁用后不再克隆该大仓，并消除 qt6quick/qt6svg 缺 qt6base 依赖的 defconfig WARNING。
+          sed -i 's/^[[:space:]]*src-git video[[:space:]]/#&/' feeds.conf.default
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
