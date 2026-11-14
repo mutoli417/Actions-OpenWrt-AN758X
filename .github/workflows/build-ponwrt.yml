@@ -32,8 +32,6 @@ env:
   PROFILE: ${{ github.event.inputs.profile || 'fiberhome_hg5585f-ct' }}
   BUILD_SCOPE: ${{ github.event.inputs.scope || 'firmware' }}
   IGNORE_CACHE: ${{ github.event.inputs.ignore_cache || 'false' }}
-  FW_BUILD_TIME: ''                 # 留空 = 自动取构建时时间（Asia/Shanghai）
-  FW_DESC_SUFFIX: ''               # 留空 = "· ponwrt · <构建时间>"；填了则完全自定义
   OPT_CRYPTO_ARM64CE: ${{ github.event.inputs.opt_arm64ce == '1' && '1' || '0' }}
   OPT_CRYPTO_CHACHA:  ${{ github.event.inputs.opt_chacha  == '1' && '1' || '0' }}
   OPT_CRYPTO_EIP93:   ${{ github.event.inputs.opt_eip93   == '1' && '1' || '0' }}
@@ -140,7 +138,7 @@ on:
           - 'true'
           - 'false'
       fw_author:
-        description: '覆盖固件版本后缀的作者名（LuCI 概览页「固件版本」）。留空 = ponwrt'
+        description: '构建作者标记（用于 CI 日志与 Release 说明）。留空 = ponwrt'
         required: false
         default: 'ponwrt'
       upload_release:
@@ -259,6 +257,8 @@ jobs:
 
           # 初始化编译环境：建议将该脚本入仓并按 commit sha 校验，
           # 避免 `curl | bash` 的供应链风险。
+          # B-M6 TODO(供应链): 优先用仓内 vendored 脚本；远端兜底分支应固定脚本版本并校验哈希，
+          #   不要长期保留 `bash <(curl -sL …)` 直连执行。待补：把该脚本纳入 scripts/ 并锁 commit。
           if [ -x "$GITHUB_WORKSPACE/scripts/init_build_environment.sh" ]; then
             bash "$GITHUB_WORKSPACE/scripts/init_build_environment.sh" || true
           else
@@ -289,8 +289,8 @@ jobs:
           git clone "$REPO_URL" -b "$REPO_BRANCH" --single-branch --depth=1 openwrt
           ln -sf "$BUILD_ROOT/openwrt" "$GITHUB_WORKSPACE/openwrt"
 
-          # 输入项为空时回退到 workflow 级默认值，确保 diy-part2.sh 拿到的
-          # 始终是确定值，而不是空串（空串会让 LuCI 概览页显示 "·  ·"）。
+          # 输入项为空时回退到 workflow 级默认值，确保后续步骤拿到的
+          # 始终是确定值，而不是空串。
           echo "FW_AUTHOR=${FW_AUTHOR:-qwe}" >> "$GITHUB_ENV"
 
           # 加密开关同样固化一遍：写进 GITHUB_ENV 后，即便哪天 workflow 级
@@ -571,8 +571,15 @@ jobs:
           
           echo "🔍 删除 LuCI 软件包页面的'更新列表'按钮..."
           
-          # 找 package-manager.js 文件
-          find build_dir/ -name "package-manager.js" -path "*/luci-app-package-manager/*" 2>/dev/null | while read f; do
+          # B-M1: 原在 build_dir/ 查找，但本步骤在编译之前、build_dir 尚未生成；
+          #   LuCI 真实源码在 feeds/luci（package/feeds 下是符号链接，find 不跟随）。
+          #   改扫 feeds/luci，未命中时打 warning，避免整段静默空转。
+          PM_FILES="$(find feeds/luci -name "package-manager.js" -path "*/luci-app-package-manager/*" 2>/dev/null)"
+          if [ -z "$PM_FILES" ]; then
+            echo "::warning::未在 feeds/luci 找到 package-manager.js，按钮清理未命中"
+          fi
+          echo "$PM_FILES" | while read f; do
+            [ -z "$f" ] && continue
             echo "  📄 处理: $f"
             # 删除 "Update lists..." 按钮那一行 
             sed -i "/Update lists…/d" "$f"
@@ -650,7 +657,7 @@ jobs:
           fi
 
       # =========================================================
-      # 8. diy-part2.sh —— 时区改为中国、写入固件版本后缀
+      # 8. diy-part2.sh —— 时区/无线默认值定制与可选包注入
       #     ★ 加密可选包就在这一步注入（diy-part2.sh 末尾 source 我们的脚本）。
       #       必须早于步骤 9 的 defconfig，否则内核符号写完就被
       #       defconfig 重新展开覆盖掉了。
@@ -659,7 +666,7 @@ jobs:
         run: |
           cd "$BUILD_ROOT/openwrt"
           chmod +x "$GITHUB_WORKSPACE/$DIY_P2_SH"
-          FW_AUTHOR="$FW_AUTHOR" FW_BUILD_TIME="$FW_BUILD_TIME" FW_DESC_SUFFIX="$FW_DESC_SUFFIX" \
+          FW_AUTHOR="$FW_AUTHOR" \
           WIFI_5G_COUNTRY="$WIFI_5G_COUNTRY" WIFI_5G_CHANNEL="$WIFI_5G_CHANNEL" \
           WIFI_5G_HTMODE="$WIFI_5G_HTMODE" WIFI_5G_FALLBACK="$WIFI_5G_FALLBACK" \
             "$GITHUB_WORKSPACE/$DIY_P2_SH"
@@ -1177,6 +1184,8 @@ jobs:
       # 16. SSH 调试（仅受控场景开启）
       # =========================================================
       - name: SSH connection to Actions
+        # B-M5 TODO(供应链): 第三方 Action 应锁定到 40 位 commit SHA，当前仍用浮动 tag。
+        #   待补：uses: mxschmitt/action-tmate@<SHA-40> # v3 （SHA 需联网核对后填写）
         uses: mxschmitt/action-tmate@v3
         # 调试入口默认关闭；仅当手动选择 ssh=true 且触发者为仓库所有者时才打开。
         # 保留 owner 校验：调试入口只对仓库所有者开放。
@@ -1473,6 +1482,7 @@ jobs:
           echo "status=success" >> "$GITHUB_OUTPUT"
 
       - name: Upload firmware to release
+        # B-M5 TODO(供应链): 锁定 40 位 commit SHA。待补：uses: softprops/action-gh-release@<SHA-40> # v2
         uses: softprops/action-gh-release@v2
         if: steps.tag.outputs.status == 'success'
         env:
@@ -1501,6 +1511,7 @@ jobs:
       # =========================================================
       - name: Delete workflow runs
         if: steps.compile.outputs.status == 'success'
+        # B-M5 TODO(供应链): 锁定 40 位 commit SHA。待补：uses: Mattraks/delete-workflow-runs@<SHA-40> # v2
         uses: Mattraks/delete-workflow-runs@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -1508,6 +1519,7 @@ jobs:
           keep_minimum_runs: 10
 
       - name: Remove old releases
+        # B-M5 TODO(供应链): 锁定 40 位 commit SHA。待补：uses: dev-drprasad/delete-older-releases@<SHA-40> # v0.3.4
         uses: dev-drprasad/delete-older-releases@v0.3.4
         if: env.UPLOAD_RELEASE == 'true' && !cancelled()
         with:

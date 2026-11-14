@@ -34,7 +34,9 @@ on:
     - cron: '20 4 * * 1'
 
 permissions:
-  contents: read
+  # B-H3: clean/backup 模式会执行 gh release delete / delete-asset（contents 写操作），
+  #   原 contents: read 会导致 403；该工作流仅做缓存与 Release 备份清理，授予 write。
+  contents: write
   actions: write
 
 jobs:
