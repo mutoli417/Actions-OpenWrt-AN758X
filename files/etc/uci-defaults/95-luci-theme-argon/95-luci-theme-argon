@@ -1,0 +1,22 @@
+#!/bin/sh
+# 默认皮肤固定为 Argon
+#
+# 背景：luci-base 预置的 /etc/config/luci 主皮肤是
+#   option mediaurlbase '/luci-static/bootstrap'；argon 包自带的 30_*
+#   首装脚本在本固件未把主皮肤切过去，首启仍落到 bootstrap。
+# 本脚本编号 95，在两个主题包的 30_* 脚本之后执行，显式把主皮肤写为 Argon；
+# 仅固定皮肤，不恢复被 workflow 隐藏的 Argon Config 设置菜单。
+# 守卫：若 Argon 静态资源目录缺失（主题未编入），保留 bootstrap，避免界面空白。
+
+ARGON_DIR="/www/luci-static/argon"
+
+if [ -d "$ARGON_DIR" ]; then
+	uci -q set luci.themes.Argon=/luci-static/argon
+	uci -q set luci.main.mediaurlbase=/luci-static/argon
+	uci -q commit luci
+	logger -t luci-theme "默认皮肤已固定为 Argon"
+else
+	logger -t luci-theme "未找到 $ARGON_DIR，保留默认 bootstrap"
+fi
+
+exit 0
