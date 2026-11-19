@@ -25,7 +25,7 @@ grep -q '^src-git helloworld' feeds.conf.default || \
 # 温度不走插件：autocore 的 /sbin/tempinfo 提供（见 files/sbin/tempinfo）
 # ---------------------------------------------------------
 ADD_AIROHA_NPU=true    # luci-app-airoha-npu：Airoha SoC 状态页（NPU/CPU/Frame Engine/PPE）
-ADD_FLUENT=true        # luci-theme-fluent：Fluent 2 风格主题
+ADD_FLUENT=false       # luci-theme-fluent：Fluent 2 风格主题（已移除，默认皮肤固定 Argon，停止拉取）
 ADD_FLUENT_LITE=false  # luci-theme-fluent-lite：轻量版（与 fluent 互斥，二选一）
 ADD_FLUENT_DASH=false  # luci-mod-fluentdashboard：可选状态概览卡片
 ADD_PASSWALL=true      # luci-app-passwall（只用 feeds 的依赖包）
