@@ -29,7 +29,7 @@ ADD_AIROHA_NPU=true    # luci-app-airoha-npu：Airoha SoC 状态页（NPU/CPU/Fr
 ADD_FLUENT=false       # luci-theme-fluent：Fluent 2 风格主题（已移除，默认皮肤 bootstrap，停止拉取）
 ADD_FLUENT_LITE=false  # luci-theme-fluent-lite：轻量版（与 fluent 互斥，二选一）
 ADD_FLUENT_DASH=false  # luci-mod-fluentdashboard：可选状态概览卡片
-ADD_PASSWALL=false     # luci-app-passwall：已停用（无其他插件引用）；xray-core/sing-box 随之一并不编入
+ADD_PASSWALL=false     # luci-app-passwall：已停用（无其他插件引用）；xray-core 随之一并不编入（sing-box 改由 HomeProxy 编入）
 ADD_OPENCLASH=false    # luci-app-openclash：已停用（无其他插件引用）；依赖 Ruby/Rust，编译极慢
 ADD_MOSDNS=true        # luci-app-mosdns（本体只用 feeds 的 mosdns）
 ADD_LUCKY=true         # luci-app-lucky（DDNS + socat）
@@ -893,11 +893,11 @@ grep -rl "NAS" feeds/luci --include='*.lua' 2>/dev/null \
     done || true
 
 # 强制禁用 passwall 系列（兜底）
-# passwall 已由 diy-part1.sh 的 ADD_PASSWALL=false 源头停用；xray-core / sing-box
-# 仅作为其内核被拉入，一并强制禁用。workflow 不再追加这三个包的 =y。
+# passwall 已由 ADD_PASSWALL=false 源头停用；xray-core 作为其内核一并强制禁用。
+# sing-box 不再随 passwall 禁用：现作为 HomeProxy 内核编入（见 release.config）。
 echo "🔒 强制禁用 passwall 系列..."
 if [ -f ".config" ]; then
-  for pkg in luci-app-passwall luci-app-passwall2 luci-i18n-passwall-zh-cn xray-core sing-box; do
+  for pkg in luci-app-passwall luci-app-passwall2 luci-i18n-passwall-zh-cn xray-core; do
     sed -i "/$pkg/d" .config 2>/dev/null || true
     echo "# CONFIG_PACKAGE_$pkg is not set" >> .config || true
   done
@@ -1137,6 +1137,16 @@ if [ -f ".config" ]; then
     echo "CONFIG_PACKAGE_$pkg=y" >> .config || true
   done
   echo "✅ 状态插件配置已强制确保"
+fi
+
+# 8. 强制确保 HomeProxy 及其内核（防止被意外剔除，或被兜底禁用段回写 not set）
+echo "🔒 强制确保 HomeProxy 配置..."
+if [ -f ".config" ]; then
+  for pkg in luci-app-homeproxy luci-i18n-homeproxy-zh-cn sing-box; do
+    sed -i "/^CONFIG_PACKAGE_${pkg}[= ]/d; /^# CONFIG_PACKAGE_${pkg} is not set/d" .config 2>/dev/null || true
+    echo "CONFIG_PACKAGE_$pkg=y" >> .config || true
+  done
+  echo "✅ HomeProxy 配置已强制确保"
 fi
 
 echo "🎉 diy-part.sh 阶段二 执行完毕 (author=$FW_AUTHOR)"
