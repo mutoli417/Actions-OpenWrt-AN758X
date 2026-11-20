@@ -18,6 +18,38 @@ PKG_DIR="package/custom"
 mkdir -p "$PKG_DIR"
 
 # ---------------------------------------------------------
+# 看门狗（WDT）源码树对齐（与 ponwrt fork 同源改动，幂等兜底）：
+#   1) 打开 CONFIG_WATCHDOG_SYSFS：暴露 state/timeout/timeleft 等 sysfs 属性，
+#      001 钳制补丁才能读到 max_timeout，避免 procd 30s 超硬件上限(~28s) 被 EINVAL。
+#   2) procd 默认超时 30s -> 24s（硬件上限约 28s），双保险。
+# 源头在 ponwrt fork 的 target config 与 procd patches；这里对 clone 下来的源码树
+# 再注入一遍，保证 source=上游 pbs05/ponwrt 编译时同样生效。
+# ---------------------------------------------------------
+for sub in an7581 an7583 en7523; do
+  wcfg="target/linux/airoha/$sub/config-6.18"
+  [ -f "$wcfg" ] || continue
+  if grep -q '^# CONFIG_WATCHDOG_SYSFS is not set' "$wcfg"; then
+    sed -i 's/^# CONFIG_WATCHDOG_SYSFS is not set$/CONFIG_WATCHDOG_SYSFS=y/' "$wcfg"
+  elif ! grep -q '^CONFIG_WATCHDOG_SYSFS=' "$wcfg"; then
+    sed -i '/^CONFIG_WATCHDOG_CORE=y$/a CONFIG_WATCHDOG_SYSFS=y' "$wcfg"
+  fi
+done
+
+mkdir -p package/system/procd/patches
+cat > package/system/procd/patches/002-watchdog-default-timeout-24s.patch <<'WDT_PATCH'
+diff --git a/watchdog.c b/watchdog.c
+--- a/watchdog.c
++++ b/watchdog.c
+@@ -31,5 +31,5 @@
+ static struct uloop_timeout wdt_timeout;
+ static int wdt_fd = -1;
+-static int wdt_drv_timeout = 30;
++static int wdt_drv_timeout = 24;
+ static int wdt_frequency = 5;
+ static bool wdt_magicclose = false;
+WDT_PATCH
+
+# ---------------------------------------------------------
 # 插件开关
 # ⚠ 关掉某个开关，defconfig 会把 config 里对应的 =y 静默剔除 —— 两处必须一起改。
 # ⚠ 标「只用 feeds」的，是本体（mosdns/smartdns）feeds 已有
