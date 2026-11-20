@@ -878,7 +878,7 @@ jobs:
                 case "$p" in -*) continue ;; esac      # DEVICE_PACKAGES 里的 -pkg 是移除项
                 p=${p%%:*}                              # 去掉 pkg:variant 的变体后缀
                 CHK=$(( CHK + 1 ))
-                # =y 与 =m 都算「会编出来」；符号整个不存在才致命
+                # =y 与 =m 都算「会编出来」；=m 包随 DEVICE_PACKAGES 由 apk add 入固件，符号整个不存在才致命
                 if grep -qx "CONFIG_PACKAGE_${p}=y" .config; then
                   continue
                 elif grep -qx "CONFIG_PACKAGE_${p}=m" .config; then
@@ -889,7 +889,11 @@ jobs:
               done
 
               if [ -n "$MOD_ONLY" ]; then
-                echo "::warning::以下包是 =m（只编包不默认安装，靠 DEVICE_PACKAGES 显式 apk add）:$MOD_ONLY"
+                # DEVICE_PACKAGES 内的 =m 包：先出 .apk，镜像组装时仍随清单 apk add
+                # 进 rootfs，与 =y 一样入固件；这是 apk 构建对 target 引用工具包的正常
+                # 形态，不算缺包，故只做普通记录、不发 warning。缺包风险由下方 MISS_DEV
+                # 的 ::error:: 兜底。
+                echo "ℹ 以下包为 =m（编入仓库、随 DEVICE_PACKAGES 由 apk add 入固件）:$MOD_ONLY"
               fi
 
               if [ -n "$MISS_DEV" ]; then
