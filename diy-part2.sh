@@ -315,15 +315,6 @@ if [ -f ".config" ]; then
   echo "✅ .config 已强制禁用 passwall 系列包"
 fi
 
-# 修复 ssr-plus 依赖 kcptun-client 缺失问题
-# Makefile 中为条件依赖写法：+PACKAGE_$(PKG_NAME)_INCLUDE_Kcptun:kcptun-client
-echo "🔧 修复 ssr-plus 依赖 kcptun-client 缺失..."
-SSR_MAKEFILE="package/feeds/helloworld/luci-app-ssr-plus/Makefile"
-if [ -f "$SSR_MAKEFILE" ]; then
-  sed -i -e 's/+PACKAGE_[^:[:space:]]*:kcptun-client//g' -e 's/+kcptun-client//g' "$SSR_MAKEFILE" 2>/dev/null || true
-  echo "✅ ssr-plus Makefile 已移除 kcptun-client 依赖"
-fi
-
 # ========== IPTV 相关菜单统一移到「网络」菜单下 ==========
 # ⚠ 原代码用 package/feeds/luci（符号链接目录，grep -r 不跟随），实际无效。
 #   改用 feeds/luci（真实源码目录），清理才会生效。
@@ -386,85 +377,6 @@ grep -rl "luciversion" feeds/luci --include="*.js" 2>/dev/null | while IFS= read
   sed -i "s/var luciversion = .*/var luciversion = '';/g" "$f" || true
   sed -i "s/luciversion = .*||.*/luciversion = '';/g" "$f" || true
 done || true
-
-# ========== SSR Plus+ 防火墙双向支持（fw3 iptables / fw4 nftables） ==========
-# ⚠ 原实现含「放行所有转发」规则（iptables -I FORWARD -j ACCEPT /
-#   nft add rule ... forward ... accept），极度危险，等于关闭防火墙转发保护。
-#   SSR Plus+ 自身会管理必要的转发规则，外部脚本再加「全放行」是多此一举。
-#   这里只保留：INPUT 端口放行（本机接收 SSR 端口）+ OUTPUT UID 放行（SSR
-#   进程向外发起连接）。转发放行由 SSR Plus+ 自己负责。
-mkdir -p files/etc/uci-defaults
-cat > files/etc/uci-defaults/97-ssr-plus-firewall <<'EOF'
-#!/bin/sh
-# ============================================================
-# SSR Plus+ 防火墙双向支持（自动适配 fw3 / fw4）
-# 只做两件事：
-#   1) 允许外部访问 SSR Plus+ 监听端口（INPUT）
-#   2) 允许 SSR Plus+ 进程向外发起连接（OUTPUT，按 UID）
-# 不添加 FORWARD 放行 —— 那是 SSR Plus+ 自己管理的规则，
-# 外部再加「全放行」会打开安全隐患。
-# ============================================================
-
-log() {
-  logger -t ssr-firewall "$@"
-  echo "[ssr-firewall] $@"
-}
-
-if command -v fw4 >/dev/null 2>&1; then
-  FW_VER="fw4"
-  log "检测到 fw4 (nftables)"
-elif command -v fw3 >/dev/null 2>&1; then
-  FW_VER="fw3"
-  log "检测到 fw3 (iptables)"
-else
-  log "未检测到防火墙，跳过"
-  exit 0
-fi
-
-i=0
-while [ $i -lt 10 ]; do
-  if pgrep -f "ssr-redir\|shadowsocksr" >/dev/null 2>&1; then
-    break
-  fi
-  i=$((i + 1))
-  sleep 1
-done
-
-SSR_PORT=$(uci get shadowsocksr.@global[0].main_port 2>/dev/null || echo "1080")
-log "SSR Plus+ 端口: $SSR_PORT"
-
-# B-M3: 入站放行只绑定 LAN 接口，避免 SSR 监听端口对 WAN 暴露。
-LAN_IF="$(uci -q get network.lan.device 2>/dev/null)"
-[ -z "$LAN_IF" ] && LAN_IF="br-lan"
-log "SSR 入站仅放行 LAN 接口: $LAN_IF"
-
-SSR_UID=""
-SSR_PIDS=$(pidof ssr-redir 2>/dev/null || echo "")
-if [ -n "$SSR_PIDS" ]; then
-  FIRST_PID=${SSR_PIDS%% *}
-  if [ -r "/proc/$FIRST_PID/status" ]; then
-    SSR_UID=$(grep "^Uid:" "/proc/$FIRST_PID/status" 2>/dev/null | awk '{print $2}')
-  fi
-fi
-
-if [ "$FW_VER" = "fw4" ]; then
-  nft add rule inet fw4 input iifname "$LAN_IF" tcp dport "$SSR_PORT" accept comment "SSR Plus+ input (LAN only)" 2>/dev/null || true
-  if [ -n "$SSR_UID" ]; then
-    nft add rule inet fw4 output meta skuid "$SSR_UID" accept comment "SSR Plus+ output" 2>/dev/null || true
-  fi
-  log "fw4 入站/出站规则已配置（入站限 LAN；转发规则由 SSR Plus+ 自身管理）"
-else
-  iptables -I INPUT -i "$LAN_IF" -p tcp --dport "$SSR_PORT" -j ACCEPT -m comment --comment "SSR Plus+ input (LAN only)" 2>/dev/null || true
-  if [ -n "$SSR_UID" ]; then
-    iptables -I OUTPUT -m owner --uid-owner "$SSR_UID" -j ACCEPT -m comment --comment "SSR Plus+ output" 2>/dev/null || true
-  fi
-  log "fw3 入站/出站规则已配置（入站限 LAN；转发规则由 SSR Plus+ 自身管理）"
-fi
-
-exit 0
-EOF
-chmod +x files/etc/uci-defaults/97-ssr-plus-firewall
-echo "✅ SSR Plus+ 入站/出站防火墙脚本已写入（转发规则交给 SSR Plus+ 自身）"
 
 # ========== EIP93 NPU 硬件加密优化 ==========
 echo "🔍 优化 EIP93 NPU 硬件加密调用..."

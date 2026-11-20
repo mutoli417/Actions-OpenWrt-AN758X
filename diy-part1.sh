@@ -11,7 +11,8 @@ echo "=========================================="
 PKG_DIR="package/custom"
 mkdir -p "$PKG_DIR"
 
-# SSR Plus+：加入 helloworld feed，并安装其索引到 LuCI
+# helloworld feed（fw876）：luci-app-ssr-plus 已源头停用；该 feed 暂保留索引，
+# 未被其他保留插件使用时可整体摘除（下方三行）。
 grep -q '^src-git helloworld' feeds.conf.default || \
   echo 'src-git helloworld https://github.com/fw876/helloworld.git' >> feeds.conf.default
 ./scripts/feeds update helloworld
