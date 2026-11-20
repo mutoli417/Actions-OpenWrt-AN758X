@@ -762,6 +762,22 @@ jobs:
             echo "::warning::缺 $WS/scripts/patch-luci-version.sh，跳过"
           fi
 
+      # HomeProxy 源码层补丁：连接检查 wget 改为经本机 mixed 代理探测，
+      # 避免本机直连 Google 被墙导致服务状态页恒显「谷歌失败」。
+      # 脚本在仓库 scripts/ 下，缺脚本 / 缺包只警告跳过，不阻断构建。
+      - name: Apply HomeProxy check-via-proxy patch
+        continue-on-error: true
+        run: |
+          cd "$BUILD_ROOT/openwrt"
+          WS="$GITHUB_WORKSPACE"
+          S="$WS/scripts/patch-homeproxy-check-via-proxy.sh"
+          if [ -f "$S" ]; then
+            dos2unix "$S" 2>/dev/null || true
+            bash "$S" "$BUILD_ROOT/openwrt"
+          else
+            echo "::warning::缺 $S，跳过"
+          fi
+
       # 用 runner 预装的 Go/Rust 替代源码编译（prebuilt_host=true）。
       # 必须在 defconfig 之前 —— 脚本写进 .config 的项要由 defconfig 展开。
       # 全部软失败：ponwrt 不支持时只 warning，退回源码编译。
