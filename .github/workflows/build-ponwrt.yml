@@ -636,7 +636,7 @@ jobs:
 
       # 摘掉 cargo 的 --frozen/--offline：dl/cargo 缓存只增不减，
       # 上游加新依赖时缓存里没有，不留联网补救会直接编挂。--locked 保留。
-      # 摘除缺基座依赖的 feed 索引目录：放在 diy-part1 之后执行，
+      # 摘除缺基座依赖的 feed 索引目录：放在 diy-part.sh 阶段一之后执行，
       # defconfig 才看不到缺依赖的包。
       # · qt6quick / qt6svg 缺 qt6base 子包；video feed 保留（mesa/wayland 由它提供）。
       # · luci-app-lldpd 依赖的 lldpd 已在上方裁剪，前端索引一并摘除。
