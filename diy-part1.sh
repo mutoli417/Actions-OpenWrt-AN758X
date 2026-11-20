@@ -11,12 +11,6 @@ echo "=========================================="
 PKG_DIR="package/custom"
 mkdir -p "$PKG_DIR"
 
-# helloworld feed（fw876）：luci-app-ssr-plus 已源头停用；该 feed 暂保留索引，
-# 未被其他保留插件使用时可整体摘除（下方三行）。
-grep -q '^src-git helloworld' feeds.conf.default || \
-  echo 'src-git helloworld https://github.com/fw876/helloworld.git' >> feeds.conf.default
-./scripts/feeds update helloworld
-./scripts/feeds install -a -p helloworld
 # ---------------------------------------------------------
 # 插件开关
 # ⚠ 关掉某个开关，defconfig 会把 config 里对应的 =y 静默剔除 —— 两处必须一起改。
