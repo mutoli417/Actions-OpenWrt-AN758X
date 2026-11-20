@@ -303,65 +303,12 @@ grep -rl "NAS" feeds/luci --include='*.lua' 2>/dev/null \
       sed -i "s/_('NAS')/_(' ')/g; s/'NAS'/' '/g" "$f" || true
     done || true
 
-# ========== 隐藏 Argon 主题设置选项菜单（保留主题皮肤本身） ==========
-echo "🔍 隐藏 Argon 主题设置选项菜单..."
-rm -rf package/feeds/luci/luci-app-argon-config 2>/dev/null || true
-
-# ⚠ package/feeds/luci 下全是符号链接，grep -r 不跟随。改用 feeds/luci（真实目录）。
-grep -rl "argon-config" feeds/luci --include="*.json" 2>/dev/null | while IFS= read -r f; do
-  # B-M8: 文件路径经环境变量传给 Python，不再把 shell 变量拼进 Python 源码字符串，避免路径注入。
-  export ARGON_F="$f"
-  if python3 -c "import json,os; json.load(open(os.environ['ARGON_F']))" 2>/dev/null; then
-    python3 -c "
-import json, os
-f = os.environ['ARGON_F']
-with open(f, 'r') as fp:
-    data = json.load(fp)
-def remove_argon(obj):
-    if isinstance(obj, dict):
-        keys_to_remove = [k for k in obj.keys() if 'argon-config' in str(k)]
-        for k in keys_to_remove:
-            del obj[k]
-        for v in obj.values():
-            remove_argon(v)
-    elif isinstance(obj, list):
-        items_to_remove = [i for i, item in enumerate(obj) if 'argon-config' in str(item)]
-        for i in reversed(items_to_remove):
-            del obj[i]
-        for item in obj:
-            remove_argon(item)
-remove_argon(data)
-with open(f, 'w') as fp:
-    json.dump(data, fp, indent=2)
-" 2>/dev/null || true
-  else
-    sed -i 's/"luci-app-argon-config",\s*//g' "$f" || true
-    sed -i 's/,\s*"luci-app-argon-config"//g' "$f" || true
-    sed -i 's/"luci-app-argon-config"//g' "$f" || true
-  fi
-  unset ARGON_F
-done || true
-
-grep -rl "argon-config" feeds/luci --include="*.js" --include="*.lua" 2>/dev/null | while IFS= read -r f; do
-  sed -i "/argon-config/d; /Argon 配置/d" "$f" || true
-done || true
-echo "✅ Argon 主题设置选项菜单已隐藏（主题皮肤保留）"
-
-# 强制禁用 argon-config（加固）
-echo "🔒 强制禁用 argon-config 包..."
-if [ -f ".config" ]; then
-  sed -i '/luci-app-argon-config/d' .config 2>/dev/null || true
-  echo "# CONFIG_PACKAGE_luci-app-argon-config is not set" >> .config || true
-  echo "✅ .config 已强制禁用 argon-config"
-fi
-
-# 强制禁用 passwall 系列
-# ⚠ xray-core / sing-box 不在此列表：workflow 的 Configure 步骤明确
-#   追加 CONFIG_PACKAGE_xray-core=y / sing-box=y（SSR Plus+ 后端），
-#   这里再禁用会被 workflow 覆盖，属于自相矛盾的死代码。
+# 强制禁用 passwall 系列（兜底）
+# passwall 已由 diy-part1.sh 的 ADD_PASSWALL=false 源头停用；xray-core / sing-box
+# 仅作为其内核被拉入，一并强制禁用。workflow 不再追加这三个包的 =y。
 echo "🔒 强制禁用 passwall 系列..."
 if [ -f ".config" ]; then
-  for pkg in luci-app-passwall luci-app-passwall2 luci-i18n-passwall-zh-cn; do
+  for pkg in luci-app-passwall luci-app-passwall2 luci-i18n-passwall-zh-cn xray-core sing-box; do
     sed -i "/$pkg/d" .config 2>/dev/null || true
     echo "# CONFIG_PACKAGE_$pkg is not set" >> .config || true
   done
@@ -661,18 +608,6 @@ done
 if [ -f /etc/banner ]; then
   sed -i "/SNAPSHOT r[0-9]/d; /OpenWrt [0-9]/d; /ImmortalWrt [0-9]/d; /PonWrt SNAPSHOT/d" /etc/banner 2>/dev/null || true
   log "已清理 /etc/banner"
-fi
-
-if [ -f /etc/config/luci ]; then
-  # B-L7: 先确认 Argon 主题静态目录已编入固件，再设置默认主题；
-  #   主题包缺失时不指向不存在的 mediaurlbase，保留 LuCI 默认主题。
-  if [ -d /www/luci-static/argon ]; then
-    uci set luci.main.mediaurlbase='/luci-static/argon' 2>/dev/null || true
-    uci commit luci 2>/dev/null || true
-    log "已设置默认主题为 Argon"
-  else
-    log "ℹ️ 未找到 Argon 主题静态目录，保留 LuCI 默认主题"
-  fi
 fi
 
 log "版本信息隐藏完成（三重保险）"

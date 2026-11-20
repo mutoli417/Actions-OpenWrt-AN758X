@@ -19,16 +19,16 @@ grep -q '^src-git helloworld' feeds.conf.default || \
 # ---------------------------------------------------------
 # 插件开关
 # ⚠ 关掉某个开关，defconfig 会把 config 里对应的 =y 静默剔除 —— 两处必须一起改。
-# ⚠ 标「只用 feeds」的，是本体（mosdns/smartdns/xray-core/sing-box）feeds 已有
+# ⚠ 标「只用 feeds」的，是本体（mosdns/smartdns）feeds 已有
 #   同名包；第三方源再拉一份会让索引出现两个同名 Package，行为不可预期。
 #   故只拷 luci 前端，本体一律用 feeds 的。
 # 温度不走插件：autocore 的 /sbin/tempinfo 提供（见 files/sbin/tempinfo）
 # ---------------------------------------------------------
 ADD_AIROHA_NPU=true    # luci-app-airoha-npu：Airoha SoC 状态页（NPU/CPU/Frame Engine/PPE）
-ADD_FLUENT=false       # luci-theme-fluent：Fluent 2 风格主题（已移除，默认皮肤固定 Argon，停止拉取）
+ADD_FLUENT=false       # luci-theme-fluent：Fluent 2 风格主题（已移除，默认皮肤 bootstrap，停止拉取）
 ADD_FLUENT_LITE=false  # luci-theme-fluent-lite：轻量版（与 fluent 互斥，二选一）
 ADD_FLUENT_DASH=false  # luci-mod-fluentdashboard：可选状态概览卡片
-ADD_PASSWALL=true      # luci-app-passwall（只用 feeds 的依赖包）
+ADD_PASSWALL=false     # luci-app-passwall：已停用（无其他插件引用）；xray-core/sing-box 随之一并不编入
 ADD_OPENCLASH=false    # luci-app-openclash：已停用（无其他插件引用）；依赖 Ruby/Rust，编译极慢
 ADD_MOSDNS=true        # luci-app-mosdns（本体只用 feeds 的 mosdns）
 ADD_LUCKY=true         # luci-app-lucky（DDNS + socat）
