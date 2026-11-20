@@ -6,8 +6,7 @@ env:
   FW_AUTHOR: ${{ github.event.inputs.fw_author || 'ponwrt' }}
   REPO_URL: ${{ github.event.inputs.source == 'fork' && 'https://github.com/mutoli417/ponwrt' || 'https://github.com/pbs05/ponwrt' }}
   FEEDS_CONF: ''
-  DIY_P1_SH: diy-part1.sh
-  DIY_P2_SH: diy-part2.sh
+  DIY_SH: diy-part.sh
   UPLOAD_BIN_DIR: false
   UPLOAD_FIRMWARE: true
   UPLOAD_RELEASE: ${{ github.event.inputs.upload_release || 'true' }}
@@ -296,7 +295,7 @@ jobs:
           git clone "$REPO_URL" -b "$REPO_BRANCH" --single-branch --depth=1 openwrt
           ln -sf "$BUILD_ROOT/openwrt" "$GITHUB_WORKSPACE/openwrt"
 
-          # 输入为空时回退默认值，别让 diy-part2.sh 拿到空串
+          # 输入为空时回退默认值，别让 diy-part.sh 阶段二拿到空串
           echo "FW_AUTHOR=${FW_AUTHOR:-ponwrt}" >> "$GITHUB_ENV"
 
           echo "OPT_CRYPTO_ARM64CE=${OPT_CRYPTO_ARM64CE}" >> "$GITHUB_ENV"
@@ -488,7 +487,7 @@ jobs:
             exit 0
           fi
 
-          # 只有 HM2004-DU 会拉私库（diy-part1.sh 的 FTTR_PROFILE 判定）
+          # 只有 HM2004-DU 会拉私库（diy-part.sh 阶段一的 FTTR_PROFILE 判定）
           if [ "${PROFILE}" != "h3c_hm2004-du" ]; then
             echo "ℹ PROFILE=${PROFILE} —— 不涉及 FTTR 私库，跳过凭证注入"
             exit 0
@@ -629,11 +628,11 @@ jobs:
             package/system/selinux-policy \
             2>/dev/null || true
 
-      - name: Pull optional plugins (diy-part1.sh)
+      - name: Pull optional plugins (diy-part.sh stage 1)
         run: |
           cd "$BUILD_ROOT/openwrt"
-          chmod +x "$GITHUB_WORKSPACE/$DIY_P1_SH"
-          "$GITHUB_WORKSPACE/$DIY_P1_SH"
+          chmod +x "$GITHUB_WORKSPACE/$DIY_SH"
+          "$GITHUB_WORKSPACE/$DIY_SH" 1
 
       # 摘掉 cargo 的 --frozen/--offline：dl/cargo 缓存只增不减，
       # 上游加新依赖时缓存里没有，不留联网补救会直接编挂。--locked 保留。
@@ -735,16 +734,16 @@ jobs:
             echo "已裁剪为: CONFIG_TARGET_DEVICE_airoha_${SOC}_DEVICE_${PROFILE}=y"
           fi
 
-      # diy-part2.sh：时区 + 固件版本后缀，加密可选包也在这里注入。
+      # diy-part.sh 阶段二：时区 + 固件版本后缀，加密可选包也在这里注入。
       # 必须早于 defconfig，否则写进 .config 的符号会被重新展开覆盖。
-      - name: Set timezone to China (diy-part2.sh)
+      - name: Set timezone to China (diy-part.sh stage 2)
         run: |
           cd "$BUILD_ROOT/openwrt"
-          chmod +x "$GITHUB_WORKSPACE/$DIY_P2_SH"
+          chmod +x "$GITHUB_WORKSPACE/$DIY_SH"
           FW_AUTHOR="$FW_AUTHOR" FW_BUILD_TIME="$FW_BUILD_TIME" FW_DESC_SUFFIX="$FW_DESC_SUFFIX" \
           WIFI_5G_COUNTRY="$WIFI_5G_COUNTRY" WIFI_5G_CHANNEL="$WIFI_5G_CHANNEL" \
           WIFI_5G_HTMODE="$WIFI_5G_HTMODE" WIFI_5G_FALLBACK="$WIFI_5G_FALLBACK" \
-            "$GITHUB_WORKSPACE/$DIY_P2_SH"
+            "$GITHUB_WORKSPACE/$DIY_SH" 2
 
           # 期望值先记下，defconfig 之后回来对照
           echo "WANT_ARM64CE=${OPT_CRYPTO_ARM64CE}" >> "$GITHUB_ENV"
@@ -831,7 +830,7 @@ jobs:
             fi
           done
           if [ -n "$OPT_MISS" ]; then
-            echo "::error::状态插件缺失:$OPT_MISS 请检查 diy-part1.sh 的 clone / 拷贝是否成功"
+            echo "::error::状态插件缺失:$OPT_MISS 请检查 diy-part.sh 阶段一的 clone / 拷贝是否成功"
             exit 1
           fi
           echo "✅ 状态插件校验通过"
@@ -841,7 +840,7 @@ jobs:
           # 光信号灯会停在 DTS 的 default-state（灭）上，所以这里当硬错误。
           if [ "$PROFILE" = "fiberhome_an4475-g2" ]; then
             if ! grep -q "^CONFIG_PACKAGE_luci-app-ledpanel=y" .config; then
-              echo "::error::luci-app-ledpanel 未启用，检查 diy-part1.sh 是否把包拷进 package/custom"
+              echo "::error::luci-app-ledpanel 未启用，检查 diy-part.sh 阶段一是否把包拷进 package/custom"
               echo "  1) 包目录: $([ -d package/custom/luci-app-ledpanel ] && echo '存在' || echo '不存在')"
               echo "  2) Makefile: $([ -f package/custom/luci-app-ledpanel/Makefile ] && echo '存在' || echo '不存在')"
               exit 1
