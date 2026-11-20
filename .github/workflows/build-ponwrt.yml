@@ -609,6 +609,10 @@ jobs:
           ./scripts/feeds install -a
 
       # 裁剪本机用不到的 overlay 可选包目录（缺依赖告警 / 体积），均软失败。
+      # 必须在 feeds install -a 之前，扫描器才看不到缺依赖的 Makefile。
+      # SELinux/audit 栈：audit、policycoreutils 已先裁，这里补裁引用它们的
+      # libsemanage / refpolicy / selinux-policy，否则 defconfig 仍会报
+      # libaudit、audit/host、policycoreutils/host 不存在。
       - name: Trim unused optional overlay packages
         run: |
           cd "$BUILD_ROOT/openwrt"
@@ -620,6 +624,9 @@ jobs:
             package/network/services/lldpd \
             package/utils/pcat-manager \
             package/utils/policycoreutils \
+            package/libs/libsemanage \
+            package/system/refpolicy \
+            package/system/selinux-policy \
             2>/dev/null || true
 
       - name: Pull optional plugins (diy-part1.sh)
@@ -630,13 +637,20 @@ jobs:
 
       # 摘掉 cargo 的 --frozen/--offline：dl/cargo 缓存只增不减，
       # 上游加新依赖时缓存里没有，不留联网补救会直接编挂。--locked 保留。
-      # 摘除 qt6quick / qt6svg 索引目录：必须在 diy-part1 之后（其末尾还会再跑
-      # 一次 feeds install -a，会重建符号链接），放在那次 install 之后摘除，
-      # defconfig 才看不到缺 qt6base 的包。video feed 保留（mesa/wayland 由它提供）。
-      - name: Drop qt6quick / qt6svg feed dirs
+      # 摘除缺基座依赖的 feed 索引目录：必须在 diy-part1 之后（其只重装 helloworld
+      # feed，不重建 packages/luci 符号链接），defconfig 才看不到缺依赖的包。
+      # · qt6quick / qt6svg 缺 qt6base 子包；video feed 保留（mesa/wayland 由它提供）。
+      # · luci-app-lldpd 依赖的 lldpd 已在上方裁剪，前端索引一并摘除。
+      # · python-semanage 直接依赖被删的基座 libsemanage；selinux-python 子包链式
+      #   依赖 python3-semanage / selinux-semanage，整源包摘除，避免连带冒新告警。
+      #   python-selinux / setools 依赖仍在的 libselinux/libsepol，保留不摘。
+      - name: Drop unused feed dirs
         run: |
           cd "$BUILD_ROOT/openwrt"
-          rm -rf package/feeds/video/qt6quick package/feeds/video/qt6svg
+          rm -rf package/feeds/video/qt6quick package/feeds/video/qt6svg \
+                 package/feeds/luci/luci-app-lldpd 2>/dev/null || true
+          rm -rf package/feeds/packages/python-semanage \
+                 package/feeds/packages/selinux-python 2>/dev/null || true
 
       - name: Remove "Update lists" button from LuCI
         run: |
