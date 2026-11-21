@@ -35,19 +35,43 @@
 - `files/sbin/homeproxy-update-ruleset.sh`：规则集周更（双镜像 + 代理兜底 + SRS 魔数校验）
 - `files/sbin/homeproxy-weekly-restart.sh`：可选每周兜底重启
 - `files/etc/uci-defaults/97-homeproxy-ruleset-cron`：规则集更新 cron（周日 03:17）
-- `files/etc/uci-defaults/98-homeproxy-ipv6-off`：默认关 IPv6 / 过滤 AAAA / 关 LAN RA
+- `files/etc/uci-defaults/98-homeproxy-ipv6-off`：**可选**整机关 IPv6（默认不执行，开关 `disable_ipv6=1`）/ 过滤 AAAA / 关 LAN RA
 - `files/etc/uci-defaults/98-homeproxy-weekly-restart`：周重启 cron 注册（默认关）
 - `scripts/patch-homeproxy-local-ruleset.sh`：编译树源码层补丁（规则集本地化 / jail 挂载 / respawn）
+- `scripts/patch-homeproxy-v6hybrid.sh`：编译树源码层补丁（混合双栈：海外 v4-only + 非 CN v6 兜底阻断）
 
-## 默认关闭 IPv6 的理由与恢复双栈
+## 默认策略：混合双栈（国内 v4+v6 直连，海外仅 v4）
 
-国内家庭场景默认关 IPv6：代理节点为 IPv4 出站，若客户端经 v6 直连海外站点，流量不进代理
-隧道，会从真实运营商 v6 出口泄漏，网站看到国内地址、代理失效；同时本机 v6 链路曾出现被
-重置导致 0 字节下载的问题。
+固件默认不整机关 IPv6，而是在生成器 `generate_client.uc` 打两处补丁：
 
-需要恢复双栈时：
+1. **DNS 全局策略 `ipv4_only`**：海外 / 未匹配域名只返回 A 记录，压制 AAAA；国内两条
+   内置 DNS 规则显式 `prefer_ipv6`，按「规则 > 全局」优先级覆盖，国内域名保留 v4+v6。
+2. **v6 兜底阻断（失败闭合）**：`route.rules` 注入 `logical and` 规则——`ip_version=6`
+   且不在 `geoip-cn` 规则集 → `block-out`。写死海外 v6 的 App / P2P 漏网时不会回落直连。
+   必须用 `logical` 包裹：扁平规则里 `ip_version` 会被 `rule_set`/`invert` 匹配语义吞掉，
+   实测会误杀 v4 海外地址。
+
+已知残留：兜底规则的 v6 路径尚未被真实海外 v6 流量压测（DNS 已先压制海外 AAAA）；写死
+v6 的 App 仍靠 nft 旁路链兜底；UDP v6 tproxy 计数器长期为 0。
+
+## 可选：整机关 IPv6（与混合双栈互斥）
+
+国内家庭场景可选择彻底关 IPv6：代理节点为 IPv4 出站，若客户端经 v6 直连海外站点，流量
+不进代理隧道，会从真实运营商 v6 出口泄漏；本机 v6 链路也曾出现被重置导致 0 字节下载。
+
+该方案与混合双栈互斥（不再保留国内 v6 直连），默认不执行，由开关启用：
 
 ```sh
+uci set homeproxy.config.disable_ipv6='1'
+/etc/uci-defaults/98-homeproxy-ipv6-off   # 或重启后由 uci-defaults 自动套用
+/etc/init.d/homeproxy restart
+/etc/init.d/dnsmasq restart
+```
+
+开关为 `0` / 不存在时，defaults 直接退出，保持混合双栈。需要从整机关 v6 退回混合双栈：
+
+```sh
+uci set homeproxy.config.disable_ipv6='0'
 uci set homeproxy.config.ipv6_support='1'
 uci set dhcp.@dnsmasq[0].filter_aaaa='0'
 uci set dhcp.lan.ra='server'
@@ -56,5 +80,3 @@ uci commit homeproxy dhcp
 /etc/init.d/homeproxy restart
 /etc/init.d/dnsmasq restart
 ```
-
-恢复后仍存在海外 v6 直连泄漏风险，建议 DNS 策略保持 `prefer_ipv4`。
