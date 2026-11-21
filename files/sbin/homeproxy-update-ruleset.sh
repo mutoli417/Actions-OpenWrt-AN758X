@@ -86,6 +86,9 @@ update_one() {
 		else
 			mv -f "$tmp" "$RULE_DIR/$name"
 			chmod 644 "$RULE_DIR/$name"
+			# 保持与包内默认属主一致（sing-box:sing-box），便于 ujail 以该身份只读读取；
+			# 属主不存在（homeproxy 包被裁）时静默放过，不阻断更新。
+			chown sing-box:sing-box "$RULE_DIR/$name" 2>/dev/null || true
 			log "$name 已更新（$(wc -c < "$RULE_DIR/$name") 字节）"
 			changed=1
 		fi
