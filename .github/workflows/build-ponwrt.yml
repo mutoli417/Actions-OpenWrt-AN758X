@@ -1373,6 +1373,38 @@ jobs:
           # 再冻一次：target 阶段顺带编出的 host 包（python3 等）只有这时才有戳
           bash "$GITHUB_WORKSPACE/scripts/pwrt-cache.sh" freeze "$CACHE_ROOT" || true
 
+      # 回归断言：init.d/homeproxy 必须带执行位。
+      # 背景：补丁脚本用 awk 重写 init 脚本后 mv 覆盖，临时文件不带 +x，曾导致产物 644、
+      # procd 首启无法拉起代理。源码层已在补丁脚本内 chmod +x，这里再在编译树/暂存 rootfs
+      # 上复核一次；定位不到文件（包未编入）只警告，不阻断。
+      - name: Verify homeproxy init.d executable bit
+        if: env.BUILD_SCOPE != 'toolchain-only'
+        run: |
+          cd "$BUILD_ROOT/openwrt"
+          BAD=0; FOUND=0
+          while IFS= read -r f; do
+            FOUND=1
+            if [ -x "$f" ]; then
+              echo "✅ 源码树 $f 可执行"
+            else
+              echo "::error::源码树 $f 缺执行位"
+              BAD=1
+            fi
+          done < <(find package/feeds feeds package -path "*/etc/init.d/homeproxy" -type f 2>/dev/null)
+          while IFS= read -r f; do
+            FOUND=1
+            if [ -x "$f" ]; then
+              echo "✅ 暂存 rootfs $f 可执行"
+            else
+              echo "::error::暂存 rootfs $f 缺执行位"
+              BAD=1
+            fi
+          done < <(find build_dir -path "*/root/etc/init.d/homeproxy" -type f 2>/dev/null)
+          if [ "$FOUND" = 0 ]; then
+            echo "::warning::未定位到 homeproxy init.d，跳过执行位断言（包可能未编入）"
+          fi
+          [ "$BAD" = 1 ] && exit 1
+
       # 独立成步、条件写 failure()：只在 if 里写 `steps.x.outcome == 'failure'` 会被
       # 隐式加上 success()，编译一失败本步直接 skipped —— 日志、注解、Summary 全丢。
       - name: Report build failure
