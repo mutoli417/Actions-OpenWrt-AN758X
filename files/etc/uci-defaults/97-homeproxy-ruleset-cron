@@ -10,6 +10,11 @@ if [ -f /sbin/homeproxy-update-ruleset.sh ]; then
 	chmod +x /sbin/homeproxy-update-ruleset.sh
 fi
 
+# 兜底：init.d 脚本若在编译期丢了执行位（644），首启服务前补回，
+# 否则 procd 无 +x 会静默不拉起 homeproxy。
+[ -f /etc/init.d/homeproxy ] && chmod +x /etc/init.d/homeproxy
+[ -f /etc/init.d/sing-box ]  && chmod +x /etc/init.d/sing-box
+
 [ -f /etc/crontabs/root ] || touch /etc/crontabs/root
 
 if ! grep -Fq "$CRON_TAG" /etc/crontabs/root; then
