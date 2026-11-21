@@ -1,0 +1,26 @@
+#!/bin/sh
+# 注册 HomeProxy 规则集定时更新：每周日 03:17 拉取最新 .srs
+# 更新失败时脚本内部保留旧规则集，不影响现有分流。
+
+CRON_TAG="#homeproxy_ruleset_autoupdate"
+LINE="17 3 * * 0 /sbin/homeproxy-update-ruleset.sh $CRON_TAG"
+
+# 更新脚本可执行位（编译期 files/sbin 已 chmod，这里兜底）
+if [ -f /sbin/homeproxy-update-ruleset.sh ]; then
+	chmod +x /sbin/homeproxy-update-ruleset.sh
+fi
+
+[ -f /etc/crontabs/root ] || touch /etc/crontabs/root
+
+if ! grep -Fq "$CRON_TAG" /etc/crontabs/root; then
+	echo "$LINE" >> /etc/crontabs/root
+	logger -t homeproxy-ruleset-cron "已注册每周规则集定时更新（周日 03:17）"
+fi
+
+# 确保 cron 开机自启并重新加载 crontab
+if [ -x /etc/init.d/cron ]; then
+	/etc/init.d/cron enable >/dev/null 2>&1 || true
+	/etc/init.d/cron restart >/dev/null 2>&1 || true
+fi
+
+exit 0
