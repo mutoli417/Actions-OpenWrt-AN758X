@@ -34,7 +34,7 @@
 - `files/etc/homeproxy/ruleset/*.srs`：编译期静态快照（geoip-cn / geosite-cn / geosite-noncn）
 - `files/sbin/homeproxy-update-ruleset.sh`：规则集周更（双镜像 + 代理兜底 + SRS 魔数校验）
 - `files/sbin/homeproxy-weekly-restart.sh`：可选每周兜底重启
-- `files/etc/uci-defaults/97-homeproxy-ruleset-cron`：规则集更新 cron（周日 03:17）
+- `files/etc/uci-defaults/97-homeproxy-ruleset-cron`：规则集更新 cron（周日 03:17）；首跑顺带兜底补回 `init.d/homeproxy`、`init.d/sing-box` 的执行位（防编译期补丁重写丢失 +x）
 - `files/etc/uci-defaults/98-homeproxy-ipv6-off`：**可选**整机关 IPv6（默认不执行，开关 `disable_ipv6=1`）/ 过滤 AAAA / 关 LAN RA
 - `files/etc/uci-defaults/98-homeproxy-weekly-restart`：周重启 cron 注册（默认关）
 - `scripts/patch-homeproxy-local-ruleset.sh`：编译树源码层补丁（规则集本地化 / jail 挂载 / respawn）
@@ -51,8 +51,9 @@
    必须用 `logical` 包裹：扁平规则里 `ip_version` 会被 `rule_set`/`invert` 匹配语义吞掉，
    实测会误杀 v4 海外地址。
 
-已知残留：兜底规则的 v6 路径尚未被真实海外 v6 流量压测（DNS 已先压制海外 AAAA）；写死
-v6 的 App 仍靠 nft 旁路链兜底；UDP v6 tproxy 计数器长期为 0。
+兜底规则已经受海外 v6 真实流量验证：约 3 小时 soak + 40 连接并发压测，block-out 全 v6、
+v4 误杀 0、国内 v6 直连、PID 稳定。已知残留：写死 v6 的 App 仍靠 nft 旁路链兜底；
+UDP/QUIC v6 在 nft 层 reject，不走兜底；UDP v6 tproxy 计数器长期为 0。
 
 ## 可选：整机关 IPv6（与混合双栈互斥）
 
