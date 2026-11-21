@@ -1,0 +1,20 @@
+#!/bin/sh
+# 刷机首启自动恢复免密 SSH：把本机 ed25519 公钥写入 dropbear authorized_keys。
+# 只内置公钥，不含私钥；同一行已存在则不重复追加；文件保持 600 root:root。
+# 本固件 SSH 为 dropbear，读取 /etc/dropbear/authorized_keys（不读 /root/.ssh）。
+
+KEY_FILE=/etc/dropbear/authorized_keys
+KEY_LINE='ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIB8N6RAIF81GV3tYEle82qhegsU09no1Z1eD1wLzwI0U doubao-cron-router-monitor'
+
+mkdir -p /etc/dropbear
+[ -f "$KEY_FILE" ] || touch "$KEY_FILE"
+
+if ! grep -Fq "$KEY_LINE" "$KEY_FILE"; then
+	echo "$KEY_LINE" >> "$KEY_FILE"
+	logger -t dropbear-auth-key "已追加免密 ed25519 公钥"
+fi
+
+chmod 600 "$KEY_FILE"
+chown root:root "$KEY_FILE" 2>/dev/null || true
+
+exit 0
