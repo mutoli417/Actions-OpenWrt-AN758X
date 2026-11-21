@@ -1,0 +1,23 @@
+#!/bin/sh
+# 注册 HomeProxy 每周兜底重启 cron（默认关闭）。
+#
+# 开关：homeproxy.config.weekly_restart='1' 启用；0 / 不存在则移除对应 cron 行。
+# 时间：每周日 04:30，避开 03:17 的规则集更新；tag 幂等去重，不重复追加。
+
+CRON_TAG="#homeproxy_weekly_restart"
+CRON_LINE="30 4 * * 0 /sbin/homeproxy-weekly-restart.sh $CRON_TAG"
+CRON_FILE="/etc/crontabs/root"
+
+[ -f "$CRON_FILE" ] || touch "$CRON_FILE"
+
+enabled="$(uci -q get homeproxy.config.weekly_restart)"
+if [ "$enabled" = "1" ]; then
+	if ! grep -Fq "$CRON_TAG" "$CRON_FILE"; then
+		echo "$CRON_LINE" >> "$CRON_FILE"
+	fi
+	logger -t homeproxy-weekly-cron "已注册每周日 04:30 HomeProxy 兜底重启"
+else
+	sed -i "/$CRON_TAG/d" "$CRON_FILE" 2>/dev/null
+fi
+
+exit 0
