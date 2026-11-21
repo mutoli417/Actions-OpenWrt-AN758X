@@ -778,6 +778,22 @@ jobs:
             echo "::warning::缺 $S，跳过"
           fi
 
+      # HomeProxy 源码层加固：三个内置规则集 remote→本地 .srs、客户端 jail
+      # 补挂 ruleset 目录、客户端实例 respawn 放宽 3600 10 10。
+      # 脚本在仓库 scripts/ 下，缺脚本 / 缺包只警告跳过，不阻断构建。
+      - name: Apply HomeProxy local-ruleset hardening patch
+        continue-on-error: true
+        run: |
+          cd "$BUILD_ROOT/openwrt"
+          WS="$GITHUB_WORKSPACE"
+          S="$WS/scripts/patch-homeproxy-local-ruleset.sh"
+          if [ -f "$S" ]; then
+            dos2unix "$S" 2>/dev/null || true
+            bash "$S" "$BUILD_ROOT/openwrt"
+          else
+            echo "::warning::缺 $S，跳过"
+          fi
+
       # 用 runner 预装的 Go/Rust 替代源码编译（prebuilt_host=true）。
       # 必须在 defconfig 之前 —— 脚本写进 .config 的项要由 defconfig 展开。
       # 全部软失败：ponwrt 不支持时只 warning，退回源码编译。
