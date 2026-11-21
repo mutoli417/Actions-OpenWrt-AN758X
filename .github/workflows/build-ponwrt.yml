@@ -794,6 +794,21 @@ jobs:
             echo "::warning::缺 $S，跳过"
           fi
 
+      # HomeProxy 混合双栈补丁：DNS 全局 ipv4_only（国内规则 prefer_ipv6
+      # 覆盖保留双栈），logical and 兜底阻断非 CN IPv6。幂等，缺包只警告跳过。
+      - name: Apply HomeProxy v6-hybrid patch
+        continue-on-error: true
+        run: |
+          cd "$BUILD_ROOT/openwrt"
+          WS="$GITHUB_WORKSPACE"
+          S="$WS/scripts/patch-homeproxy-v6hybrid.sh"
+          if [ -f "$S" ]; then
+            dos2unix "$S" 2>/dev/null || true
+            bash "$S" "$BUILD_ROOT/openwrt"
+          else
+            echo "::warning::缺 $S，跳过"
+          fi
+
       # 用 runner 预装的 Go/Rust 替代源码编译（prebuilt_host=true）。
       # 必须在 defconfig 之前 —— 脚本写进 .config 的项要由 defconfig 展开。
       # 全部软失败：ponwrt 不支持时只 warning，退回源码编译。
