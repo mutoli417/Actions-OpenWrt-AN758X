@@ -1,18 +1,27 @@
 #!/bin/sh
-# HomeProxy 国内场景默认关闭 IPv6：避免本应走代理的海外流量经 v6 直连，
-# 从真实运营商 v6 出口泄漏（网站看到国内 v6 地址，代理失效）。
+# 可选：整机关闭 IPv6（默认不执行）。
 #
-# 三项联动：
+# 开关：homeproxy.config.disable_ipv6='1' 才套用；0 / 不存在则保持默认
+# 混合双栈策略（国内 v4+v6 直连，海外 DNS 压制 AAAA，非 CN v6 兜底阻断，
+# 见 scripts/patch-homeproxy-v6hybrid.sh）。
+#
+# 启用后三项联动：
 #   1. homeproxy ipv6_support=0：sing-box 不再生成 ip6 入站 / 路由规则，
 #      DNS 策略强制 ipv4_only；
 #   2. dnsmasq filter_aaaa=1：不向客户端返回 AAAA 记录；
 #   3. LAN RA / DHCPv6 关闭：不下发 v6 前缀，客户端不自动配置 v6 地址。
 #
-# 幂等：重复执行结果一致。未安装 homeproxy 时只跳过其配置段，dnsmasq/LAN 项照常兜底。
-# 恢复双栈：改回下文对应 UCI 值并重启 homeproxy、dnsmasq（详见 HOMEPROXY-COMPAT.md）。
+# 幂等：重复执行结果一致。未安装 homeproxy 时只跳过其配置段，dnsmasq/LAN
+# 项照常兜底。与混合双栈方案互斥：启用本开关即放弃国内 v6 直连。
 
 TAG="homeproxy-ipv6"
 log() { logger -t "$TAG" "$*"; }
+
+enabled="$(uci -q get homeproxy.config.disable_ipv6)"
+if [ "$enabled" != "1" ]; then
+	log "disable_ipv6 未启用，保持默认混合双栈，跳过"
+	exit 0
+fi
 
 # 1. HomeProxy 关闭 IPv6 支持（配置段不存在则跳过，不凭空建段）
 if [ -n "$(uci -q get homeproxy.config 2>/dev/null)" ]; then
