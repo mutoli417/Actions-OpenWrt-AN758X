@@ -1403,7 +1403,7 @@ jobs:
           if [ "$FOUND" = 0 ]; then
             echo "::warning::未定位到 homeproxy init.d，跳过执行位断言（包可能未编入）"
           fi
-          [ "$BAD" = 1 ] && exit 1
+          if [ "$BAD" = 1 ]; then exit 1; fi
 
       # 独立成步、条件写 failure()：只在 if 里写 `steps.x.outcome == 'failure'` 会被
       # 隐式加上 success()，编译一失败本步直接 skipped —— 日志、注解、Summary 全丢。
