@@ -34,6 +34,7 @@
 - `files/etc/homeproxy/ruleset/*.srs`：编译期静态快照（geoip-cn / geosite-cn / geosite-noncn）
 - `files/sbin/homeproxy-update-ruleset.sh`：规则集周更（双镜像 + 代理兜底 + SRS 魔数校验）
 - `files/sbin/homeproxy-weekly-restart.sh`：可选每周兜底重启
+- `files/etc/uci-defaults/96-dropbear-auth-key`：首启把内置 ed25519 **公钥**写入 `/etc/dropbear/authorized_keys`（刷机后免密 SSH 自动恢复；只含公钥，600 root:root，幂等追加）
 - `files/etc/uci-defaults/97-homeproxy-ruleset-cron`：规则集更新 cron（周日 03:17）；首跑顺带兜底补回 `init.d/homeproxy`、`init.d/sing-box` 的执行位（防编译期补丁重写丢失 +x）
 - `files/etc/uci-defaults/98-homeproxy-ipv6-off`：**可选**整机关 IPv6（默认不执行，开关 `disable_ipv6=1`）/ 过滤 AAAA / 关 LAN RA
 - `files/etc/uci-defaults/98-homeproxy-weekly-restart`：周重启 cron 注册（默认关）
