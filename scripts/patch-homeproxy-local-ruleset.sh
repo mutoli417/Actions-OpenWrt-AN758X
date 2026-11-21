@@ -143,6 +143,8 @@ inst == "c" && /^[ \t]*procd_set_param respawn[ \t]*$/ {
 AWK
 
     awk -f "$AWK_INIT" "$F" > "$F.tmp" && mv "$F.tmp" "$F"
+    # mktemp 临时文件不带执行位，mv 覆盖会丢掉 init 脚本 +x，补回防止打包成 644
+    chmod +x "$F"
     rm -f "$AWK_INIT"
 
     AFTER=$(md5sum "$F" | cut -d' ' -f1)
