@@ -39,11 +39,11 @@
 - `files/etc/uci-defaults/98-homeproxy-ipv6-off`：**可选**整机关 IPv6（默认不执行，开关 `disable_ipv6=1`）/ 过滤 AAAA / 关 LAN RA
 - `files/etc/uci-defaults/98-homeproxy-weekly-restart`：周重启 cron 注册（默认关）
 - `scripts/patch-homeproxy-local-ruleset.sh`：编译树源码层补丁（规则集本地化 / jail 挂载 / respawn）
-- `scripts/patch-homeproxy-v6hybrid.sh`：编译树源码层补丁（混合双栈：海外 v4-only + 非 CN v6 兜底阻断）
+- `scripts/patch-homeproxy-v6hybrid.sh`：编译树源码层补丁（混合双栈：海外 v4-only + 非 CN v6 兜底阻断 + 境外 DNS 主备故障转移）
 
 ## 默认策略：混合双栈（国内 v4+v6 直连，海外仅 v4）
 
-固件默认不整机关 IPv6，而是在生成器 `generate_client.uc` 打两处补丁：
+固件默认不整机关 IPv6，而是在生成器 `generate_client.uc` 打三处补丁：
 
 1. **DNS 全局策略 `ipv4_only`**：海外 / 未匹配域名只返回 A 记录，压制 AAAA；国内两条
    内置 DNS 规则显式 `prefer_ipv6`，按「规则 > 全局」优先级覆盖，国内域名保留 v4+v6。
@@ -51,6 +51,11 @@
    且不在 `geoip-cn` 规则集 → `block-out`。写死海外 v6 的 App / P2P 漏网时不会回落直连。
    必须用 `logical` 包裹：扁平规则里 `ip_version` 会被 `rule_set`/`invert` 匹配语义吞掉，
    实测会误杀 v4 海外地址。
+3. **境外 DNS 主备故障转移**：`config.dns.servers` 在 `main-dns`（TCP 8.8.8.8，detour
+   `main-out`）之后追加 `main-dns-alt`（TCP 1.1.1.1，同样 detour `main-out`），二者共用
+   `default-dns` 做域解析器；`final` 仍指向 `main-dns`，sing-box 按服务器列表顺序在主备
+   间转移。用于缓解主上游经节点间歇 EOF / RST / deadline；备用项与主项同属代理隧道，不引入
+   DNS 泄漏。仅非 custom 的主节点 / bypass 分支生效（与 `main-dns` 同一段 `if (!isEmpty(main_node))`）。
 
 兜底规则已经受海外 v6 真实流量验证：约 3 小时 soak + 40 连接并发压测，block-out 全 v6、
 v4 误杀 0、国内 v6 直连、PID 稳定。已知残留：写死 v6 的 App 仍靠 nft 旁路链兜底；
