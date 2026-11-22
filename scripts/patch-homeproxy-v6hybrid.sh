@@ -9,12 +9,16 @@
 #   dns_rule / routing_rule / ruleset 段被生成器分支跳过，stock UCI
 #   配不出该策略；需在编译树源码层改 generate_client.uc。
 #
-#   两处改动：
+#   三处改动：
 #     1. DNS 全局策略强制 ipv4_only：国内两条内置规则显式 prefer_ipv6
 #        覆盖全局，国内双栈保留；海外 / 未匹配域名只返回 A 记录。
 #     2. route.rules 注入 logical-and 兜底规则：ip_version=6 且不在
 #        geoip-cn 规则集 → block-out。必须用 logical 包裹：扁平规则里
 #        ip_version 会被 rule_set/invert 匹配语义吞掉，误杀 v4 连接。
+#     3. DNS 故障转移：追加 main-dns-alt（TCP 1.1.1.1，detour main-out
+#        走代理节点），与 main-dns（TCP 8.8.8.8）同域解析器；final 仍
+#        指向 main-dns，sing-box 按服务器顺序在主备间转移，缓解主上游
+#        经节点间歇 EOF/RST/deadline。
 #
 #   幂等：重复执行跳过；包缺失 / 未匹配只警告，不阻断构建。
 #   用法: bash patch-homeproxy-v6hybrid.sh [openwrt_dir]
@@ -70,6 +74,24 @@ prev_defif && /^};$/ {
   print "\toutbound: 'block-out'"
   print "});"
   prev_defif = 0
+  next
+}
+
+# Hunk C：main-dns 之后追加 1.1.1.1 备用境外 DNS（同走 main-out 节点）
+/config\.dns\.final = 'main-dns';/ {
+  print
+  print ""
+  print "/* v6hybrid-dns-alt: backup overseas DNS over main-out; failover after main-dns */"
+  print "push(config.dns.servers, {"
+  print "\ttag: 'main-dns-alt',"
+  print "\tdomain_resolver: {"
+  print "\t\tserver: 'default-dns',"
+  print "\t\tstrategy: (ipv6_support !== '1') ? 'ipv4_only' : null"
+  print "\t},"
+  print "\tdetour: 'main-out',"
+  print "\ttype: 'tcp',"
+  print "\tserver: '1.1.1.1'"
+  print "});"
   next
 }
 
