@@ -15,12 +15,14 @@
 #     2. route.rules 注入 logical-and 兜底规则：ip_version=6 且不在
 #        geoip-cn 规则集 → block-out。必须用 logical 包裹：扁平规则里
 #        ip_version 会被 rule_set/invert 匹配语义吞掉，误杀 v4 连接。
-#     3. DNS 故障转移：追加 main-dns-alt（TCP 1.1.1.1，detour main-out
-#        走代理节点），与 main-dns（TCP 8.8.8.8）同域解析器；final 仍
-#        指向 main-dns，sing-box 按服务器顺序在主备间转移，缓解主上游
-#        经节点间歇 EOF/RST/deadline。
+#     3. DNS 故障转移：在 main-dns（TCP 8.8.8.8，detour main-out）之后
+#        依次追加 main-dns-alt（TCP 1.1.1.1）、main-dns-alt2（TCP 8.8.4.4），
+#        均同走 main-out、共用 default-dns 域解析器；final 仍指向 main-dns，
+#        sing-box 按服务器顺序在主备间逐级转移，缓解主上游经节点间歇
+#        EOF/RST/deadline。
 #
-#   幂等：重复执行跳过；包缺失 / 未匹配只警告，不阻断构建。
+#   幂等：重复执行跳过；包缺失只警告；锚点未命中在 patch 后显式
+#   ::error:: 列出未命中 hunk（不再静默），便于构建日志定位。
 #   用法: bash patch-homeproxy-v6hybrid.sh [openwrt_dir]
 # =============================================================
 
@@ -48,6 +50,9 @@ for F in $UCS; do
   fi
 
   BEFORE=$(md5sum "$F" | cut -d' ' -f1)
+
+  # 锚点命中计数：patch 后逐项校验，未命中显式报错，避免上游重构后静默漏打
+  hit_a=0; hit_b=0; hit_c=0
 
   AWK_UC="$(mktemp)"
   cat > "$AWK_UC" <<'AWK'
@@ -77,7 +82,7 @@ prev_defif && /^};$/ {
   next
 }
 
-# Hunk C：main-dns 之后追加 1.1.1.1 备用境外 DNS（同走 main-out 节点）
+# Hunk C：main-dns 之后追加两级备用境外 DNS（同走 main-out 节点）
 /config\.dns\.final = 'main-dns';/ {
   print
   print ""
@@ -92,6 +97,18 @@ prev_defif && /^};$/ {
   print "\ttype: 'tcp',"
   print "\tserver: '1.1.1.1'"
   print "});"
+  print ""
+  print "/* v6hybrid-dns-alt2: second backup overseas DNS over main-out */"
+  print "push(config.dns.servers, {"
+  print "\ttag: 'main-dns-alt2',"
+  print "\tdomain_resolver: {"
+  print "\t\tserver: 'default-dns',"
+  print "\t\tstrategy: (ipv6_support !== '1') ? 'ipv4_only' : null"
+  print "\t},"
+  print "\tdetour: 'main-out',"
+  print "\ttype: 'tcp',"
+  print "\tserver: '8.8.4.4'"
+  print "});"
   next
 }
 
@@ -101,12 +118,24 @@ AWK
   awk -f "$AWK_UC" "$F" > "$F.tmp" && mv "$F.tmp" "$F"
   rm -f "$AWK_UC"
 
+  # 锚点加固：检查三处 hunk 标记是否都落进产物
+  grep -q "v6hybrid: overseas v4-only" "$F" && hit_a=1
+  grep -q "v6hybrid-guard" "$F" && hit_b=1
+  grep -q "v6hybrid-dns-alt" "$F" && hit_c=1
+
   AFTER=$(md5sum "$F" | cut -d' ' -f1)
   if [ "$BEFORE" != "$AFTER" ]; then
     echo "✅ 已打 v6hybrid 补丁 $F"
     grep -n "v6hybrid" "$F" | sed 's/^/  /'
   else
     echo "::warning::$F 未匹配到目标行，保持原样"
+  fi
+
+  [ "$hit_a" -ne 1 ] && echo "::error::Hunk A (dns_default_strategy ipv4_only) 未命中 $F"
+  [ "$hit_b" -ne 1 ] && echo "::error::Hunk B (v6 guard block-out) 未命中 $F"
+  [ "$hit_c" -ne 1 ] && echo "::error::Hunk C (main-dns-alt 备用 DNS) 未命中 $F"
+  if [ "$hit_a" -ne 1 ] || [ "$hit_b" -ne 1 ] || [ "$hit_c" -ne 1 ]; then
+    echo "::error::$F 存在未命中锚点，请核对上游 generate_client.uc 是否重构"
   fi
 done
 
