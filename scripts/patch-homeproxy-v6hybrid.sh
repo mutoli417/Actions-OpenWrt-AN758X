@@ -21,12 +21,17 @@
 #        sing-box 按服务器顺序在主备间逐级转移，缓解主上游经节点间歇
 #        EOF/RST/deadline。
 #
-#   幂等：重复执行跳过；包缺失只警告；锚点未命中在 patch 后显式
-#   ::error:: 列出未命中 hunk（不再静默），便于构建日志定位。
+#   退出码口径（硬失败，及早暴露上游重构 / 写入异常）：
+#     - 包整体缺失（find 无结果）：::warning:: 跳过，exit 0；
+#     - 已打过补丁：幂等跳过，exit 0；
+#     - 目标文件存在但锚点未命中 / awk 或 mv 失败 / 改写后无变化 / 任一
+#       hunk 标记未落入产物：::error:: 记录，exit 1 中止构建。
 #   用法: bash patch-homeproxy-v6hybrid.sh [openwrt_dir]
 # =============================================================
 
 set -u
+
+RC=0
 
 OW="${1:-$PWD}"
 cd "$OW" || { echo "::error::无法进入 $OW"; exit 1; }
@@ -45,7 +50,8 @@ for F in $UCS; do
   fi
 
   if ! grep -q "dns_default_strategy = (ipv6_support !== '1')" "$F" 2>/dev/null; then
-    echo "::warning::$F 未匹配到上游 DNS 策略行，保持原样"
+    echo "::error::$F 未匹配到上游 DNS 策略行（上游可能已重构），保持原样"
+    RC=1
     continue
   fi
 
@@ -115,7 +121,18 @@ prev_defif && /^};$/ {
 { print }
 AWK
 
-  awk -f "$AWK_UC" "$F" > "$F.tmp" && mv "$F.tmp" "$F"
+  if ! awk -f "$AWK_UC" "$F" > "$F.tmp"; then
+    echo "::error::$F awk 生成临时文件失败"
+    RC=1
+    rm -f "$AWK_UC" "$F.tmp"
+    continue
+  fi
+  if ! mv "$F.tmp" "$F"; then
+    echo "::error::$F 临时文件替换失败"
+    RC=1
+    rm -f "$AWK_UC" "$F.tmp"
+    continue
+  fi
   rm -f "$AWK_UC"
 
   # 锚点加固：检查三处 hunk 标记是否都落进产物
@@ -128,15 +145,16 @@ AWK
     echo "✅ 已打 v6hybrid 补丁 $F"
     grep -n "v6hybrid" "$F" | sed 's/^/  /'
   else
-    echo "::warning::$F 未匹配到目标行，保持原样"
+    echo "::error::$F 未匹配到目标行，保持原样"
+    RC=1
   fi
 
-  [ "$hit_a" -ne 1 ] && echo "::error::Hunk A (dns_default_strategy ipv4_only) 未命中 $F"
-  [ "$hit_b" -ne 1 ] && echo "::error::Hunk B (v6 guard block-out) 未命中 $F"
-  [ "$hit_c" -ne 1 ] && echo "::error::Hunk C (main-dns-alt 备用 DNS) 未命中 $F"
+  [ "$hit_a" -ne 1 ] && { echo "::error::Hunk A (dns_default_strategy ipv4_only) 未命中 $F"; RC=1; }
+  [ "$hit_b" -ne 1 ] && { echo "::error::Hunk B (v6 guard block-out) 未命中 $F"; RC=1; }
+  [ "$hit_c" -ne 1 ] && { echo "::error::Hunk C (main-dns-alt 备用 DNS) 未命中 $F"; RC=1; }
   if [ "$hit_a" -ne 1 ] || [ "$hit_b" -ne 1 ] || [ "$hit_c" -ne 1 ]; then
     echo "::error::$F 存在未命中锚点，请核对上游 generate_client.uc 是否重构"
   fi
 done
 
-exit 0
+exit "$RC"
