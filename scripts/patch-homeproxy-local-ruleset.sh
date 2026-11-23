@@ -18,11 +18,17 @@
 #        1 小时内最多崩溃 10 次、稳定 10 秒才算一次；服务器实例与 log-cleaner
 #        维持裸 respawn 不变。
 #
-#   幂等：重复执行不会二次改动；包缺失 / 未匹配只警告跳过，不阻断构建。
+#   退出码口径（硬失败，及早暴露上游重构 / 写入异常）：
+#     - 包整体缺失（find 无结果）：::warning:: 跳过，exit 0；
+#     - 已打过补丁：幂等跳过，exit 0；
+#     - 目标文件存在但锚点未命中 / awk 或 mv 失败 / 改写后无变化 / 残留
+#       remote 下载地址：::error:: 记录，exit 1 中止构建。
 #   用法: bash patch-homeproxy-local-ruleset.sh [openwrt_dir]
 # =============================================================
 
 set -u
+
+RC=0
 
 OW="${1:-$PWD}"
 cd "$OW" || { echo "::error::无法进入 $OW"; exit 1; }
@@ -41,7 +47,8 @@ else
       continue
     fi
     if ! grep -q "type: 'remote'" "$F" 2>/dev/null; then
-      echo "::warning::$F 未匹配到 remote 规则集，保持原样"
+      echo "::error::$F 未匹配到 remote 规则集（上游可能已重构），保持原样"
+      RC=1
       continue
     fi
 
@@ -76,19 +83,32 @@ inremote && /tag: '/ {
 { print }
 AWK
 
-    awk -f "$AWK_UC" "$F" > "$F.tmp" && mv "$F.tmp" "$F"
+    if ! awk -f "$AWK_UC" "$F" > "$F.tmp"; then
+      echo "::error::$F awk 生成临时文件失败"
+      RC=1
+      rm -f "$AWK_UC" "$F.tmp"
+      continue
+    fi
+    if ! mv "$F.tmp" "$F"; then
+      echo "::error::$F 临时文件替换失败"
+      RC=1
+      rm -f "$AWK_UC" "$F.tmp"
+      continue
+    fi
     rm -f "$AWK_UC"
 
     AFTER=$(md5sum "$F" | cut -d' ' -f1)
     if [ "$BEFORE" != "$AFTER" ]; then
       echo "✅ 已将 $F 三个内置规则集改为本地 .srs"
       if grep -n "fastly.jsdelivr.net" "$F" | grep -E "geoip-cn|geosite-cn|geosite-noncn"; then
-        echo "::warning::$F 仍残留内置规则集 remote 下载地址，见上方行号"
+        echo "::error::$F 仍残留内置规则集 remote 下载地址，见上方行号"
+        RC=1
       else
         echo "  复核：内置规则集已无 remote 下载地址"
       fi
     else
-      echo "::warning::未匹配到内置 remote 规则集，$F 保持原样"
+      echo "::error::未匹配到内置 remote 规则集，$F 保持原样"
+      RC=1
     fi
   done
 fi
@@ -102,7 +122,12 @@ for C in $INIT_CANDIDATES; do
 done
 
 if [ -z "$INITS" ]; then
-  echo "::warning::未找到 homeproxy init 脚本，跳过 jail 挂载 / respawn 补丁"
+  if [ -n "$UCS" ]; then
+    echo "::error::未找到 homeproxy init 脚本（上游可能已重构），跳过 jail 挂载 / respawn 补丁"
+    RC=1
+  else
+    echo "::warning::未找到 homeproxy init 脚本，跳过 jail 挂载 / respawn 补丁"
+  fi
 else
   for F in $INITS; do
     if grep -q 'procd_add_jail_mount "$HP_DIR/ruleset/"' "$F" 2>/dev/null \
@@ -142,7 +167,18 @@ inst == "c" && /^[ \t]*procd_set_param respawn[ \t]*$/ {
 { print }
 AWK
 
-    awk -f "$AWK_INIT" "$F" > "$F.tmp" && mv "$F.tmp" "$F"
+    if ! awk -f "$AWK_INIT" "$F" > "$F.tmp"; then
+      echo "::error::$F awk 生成临时文件失败"
+      RC=1
+      rm -f "$AWK_INIT" "$F.tmp"
+      continue
+    fi
+    if ! mv "$F.tmp" "$F"; then
+      echo "::error::$F 临时文件替换失败"
+      RC=1
+      rm -f "$AWK_INIT" "$F.tmp"
+      continue
+    fi
     # mktemp 临时文件不带执行位，mv 覆盖会丢掉 init 脚本 +x，补回防止打包成 644
     chmod +x "$F"
     rm -f "$AWK_INIT"
@@ -155,9 +191,10 @@ AWK
         echo "  复核：其余实例保持裸 respawn"
       fi
     else
-      echo "::warning::init 未匹配到目标行，$F 保持原样"
+      echo "::error::init 未匹配到目标行，$F 保持原样"
+      RC=1
     fi
   done
 fi
 
-exit 0
+exit "$RC"
