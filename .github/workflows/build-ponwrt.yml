@@ -764,50 +764,38 @@ jobs:
 
       # HomeProxy 源码层补丁：连接检查 wget 改为经本机 mixed 代理探测，
       # 避免本机直连 Google 被墙导致服务状态页恒显「谷歌失败」。
-      # 脚本在仓库 scripts/ 下，缺脚本 / 缺包只警告跳过，不阻断构建。
+      # 包整体缺失才警告跳过；锚点未命中 / 写入失败由脚本 exit 1 中止构建。
       - name: Apply HomeProxy check-via-proxy patch
-        continue-on-error: true
         run: |
           cd "$BUILD_ROOT/openwrt"
           WS="$GITHUB_WORKSPACE"
           S="$WS/scripts/patch-homeproxy-check-via-proxy.sh"
-          if [ -f "$S" ]; then
-            dos2unix "$S" 2>/dev/null || true
-            bash "$S" "$BUILD_ROOT/openwrt"
-          else
-            echo "::warning::缺 $S，跳过"
-          fi
+          [ -f "$S" ] || { echo "::error::缺 $S，构建中止"; exit 1; }
+          dos2unix "$S" 2>/dev/null || true
+          bash "$S" "$BUILD_ROOT/openwrt"
 
       # HomeProxy 源码层加固：三个内置规则集 remote→本地 .srs、客户端 jail
       # 补挂 ruleset 目录、客户端实例 respawn 放宽 3600 10 10。
-      # 脚本在仓库 scripts/ 下，缺脚本 / 缺包只警告跳过，不阻断构建。
+      # 包整体缺失才警告跳过；锚点未命中 / 写入失败由脚本 exit 1 中止构建。
       - name: Apply HomeProxy local-ruleset hardening patch
-        continue-on-error: true
         run: |
           cd "$BUILD_ROOT/openwrt"
           WS="$GITHUB_WORKSPACE"
           S="$WS/scripts/patch-homeproxy-local-ruleset.sh"
-          if [ -f "$S" ]; then
-            dos2unix "$S" 2>/dev/null || true
-            bash "$S" "$BUILD_ROOT/openwrt"
-          else
-            echo "::warning::缺 $S，跳过"
-          fi
+          [ -f "$S" ] || { echo "::error::缺 $S，构建中止"; exit 1; }
+          dos2unix "$S" 2>/dev/null || true
+          bash "$S" "$BUILD_ROOT/openwrt"
 
       # HomeProxy 混合双栈补丁：DNS 全局 ipv4_only（国内规则 prefer_ipv6
-      # 覆盖保留双栈），logical and 兜底阻断非 CN IPv6。幂等，缺包只警告跳过。
+      # 覆盖保留双栈），logical and 兜底阻断非 CN IPv6。幂等，包整体缺失警告跳过。
       - name: Apply HomeProxy v6-hybrid patch
-        continue-on-error: true
         run: |
           cd "$BUILD_ROOT/openwrt"
           WS="$GITHUB_WORKSPACE"
           S="$WS/scripts/patch-homeproxy-v6hybrid.sh"
-          if [ -f "$S" ]; then
-            dos2unix "$S" 2>/dev/null || true
-            bash "$S" "$BUILD_ROOT/openwrt"
-          else
-            echo "::warning::缺 $S，跳过"
-          fi
+          [ -f "$S" ] || { echo "::error::缺 $S，构建中止"; exit 1; }
+          dos2unix "$S" 2>/dev/null || true
+          bash "$S" "$BUILD_ROOT/openwrt"
 
       # 用 runner 预装的 Go/Rust 替代源码编译（prebuilt_host=true）。
       # 必须在 defconfig 之前 —— 脚本写进 .config 的项要由 defconfig 展开。
