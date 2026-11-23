@@ -15,11 +15,17 @@
 #   最小侵入：只改命令字符串前缀，不新增 ucode import / UCI 读取逻辑，
 #     避免后端 rpcd ucode 加载失败导致整页 RPC 不可用。
 #
-#   幂等：重复执行不会二次改动；包缺失 / 未匹配只警告跳过，不阻断构建。
+#   退出码口径（硬失败，及早暴露上游重构 / 写入异常）：
+#     - 包整体缺失（find 无结果）：::warning:: 跳过，exit 0；
+#     - 已打过补丁：幂等跳过，exit 0；
+#     - 目标文件存在但锚点未命中 / sed 改写失败 / 复核残留直连：
+#       ::error:: 记录，exit 1 中止构建。
 #   用法: bash patch-homeproxy-check-via-proxy.sh [openwrt_dir]
 # =============================================================
 
 set -u
+
+RC=0
 
 OW="${1:-$PWD}"
 cd "$OW" || { echo "::error::无法进入 $OW"; exit 1; }
@@ -42,14 +48,19 @@ for F in $FILES; do
   fi
 
   if ! grep -q '`/usr/bin/wget --spider -qT3' "$F"; then
-    echo "::warning::$F 未匹配到本机直连 wget 检查，保持原样"
+    echo "::error::$F 未匹配到本机直连 wget 检查（上游可能已重构），保持原样"
+    RC=1
     continue
   fi
 
   BEFORE=$(md5sum "$F" | cut -d' ' -f1)
 
   # 只在反引号模板内、wget 命令前注入代理环境变量；保留 ${url} 与重定向原样。
-  sed -i "s#\`/usr/bin/wget --spider -qT3#\`https_proxy=${PROXY} /usr/bin/wget --spider -qT3#" "$F"
+  if ! sed -i "s#\`/usr/bin/wget --spider -qT3#\`https_proxy=${PROXY} /usr/bin/wget --spider -qT3#" "$F"; then
+    echo "::error::$F sed 改写失败"
+    RC=1
+    continue
+  fi
 
   AFTER=$(md5sum "$F" | cut -d' ' -f1)
 
@@ -57,13 +68,15 @@ for F in $FILES; do
     echo "✅ 已将 $F 连接检查改为经 mixed 代理 ${PROXY} 探测"
     # 复核：不应再存在未带代理前缀的直连 spider 检查
     if grep -n '`/usr/bin/wget --spider' "$F" | grep -v "https_proxy=${PROXY}"; then
-      echo "::warning::$F 仍有未走代理的 wget spider 检查，见上方行号"
+      echo "::error::$F 仍有未走代理的 wget spider 检查，见上方行号"
+      RC=1
     else
       echo "  复核：连接检查 wget 均已带代理前缀"
     fi
   else
-    echo "::warning::未匹配到 wget 检查内容，$F 保持原样"
+    echo "::error::未匹配到 wget 检查内容，$F 保持原样"
+    RC=1
   fi
 done
 
-exit 0
+exit "$RC"
