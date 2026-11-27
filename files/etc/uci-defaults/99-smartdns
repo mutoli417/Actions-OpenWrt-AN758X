@@ -1,0 +1,28 @@
+#!/bin/sh
+# B 方案 SmartDNS 首启兜底：脚本执行位、目录、探活 cron。
+# 默认不启用 smartdns 服务（/etc/config/smartdns enabled='0'），
+# 运行期由 homeproxy.config.smartdns_enabled 开关统一控制是否接入。
+
+TAG="smartdns-defaults"
+CRON_TAG="#smartdns_watchdog"
+LINE="*/5 * * * * /sbin/smartdns-watchdog.sh $CRON_TAG"
+
+# 探活脚本执行位（编译期 files/sbin 已 chmod，这里兜底）
+if [ -f /sbin/smartdns-watchdog.sh ]; then
+	chmod +x /sbin/smartdns-watchdog.sh
+fi
+
+# 上游包安装的目录兜底（包缺失时静默创建，不影响其余启动项）
+mkdir -p /etc/smartdns/domain-set /etc/smartdns/ip-set /etc/smartdns/conf.d /etc/smartdns/download 2>/dev/null
+
+[ -f /etc/crontabs/root ] || touch /etc/crontabs/root
+if ! grep -Fq "$CRON_TAG" /etc/crontabs/root; then
+	echo "$LINE" >> /etc/crontabs/root
+	logger -t "$TAG" "已注册 SmartDNS 探活 cron（每 5 分钟）"
+fi
+
+if [ -x /etc/init.d/cron ]; then
+	/etc/init.d/cron restart >/dev/null 2>&1 || true
+fi
+
+exit 0
