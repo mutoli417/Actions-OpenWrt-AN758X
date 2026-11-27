@@ -797,6 +797,19 @@ jobs:
           dos2unix "$S" 2>/dev/null || true
           bash "$S" "$BUILD_ROOT/openwrt"
 
+      # HomeProxy 出站域名解析冗余加固：追加备用直连 DNS（TCP 119.29.29.29），
+      # main-out 端点/出站显式挂该解析器；proxy-domain 境外查询接 evaluate/respond
+      # 三路并行 race（main-dns/alt/alt2），取首条有效响应。
+      # 幂等，包整体缺失警告跳过；锚点未命中 / 写入失败由脚本 exit 1 中止构建。
+      - name: Apply HomeProxy resolver-failover patch
+        run: |
+          cd "$BUILD_ROOT/openwrt"
+          WS="$GITHUB_WORKSPACE"
+          S="$WS/scripts/patch-homeproxy-resolver-failover.sh"
+          [ -f "$S" ] || { echo "::error::缺 $S，构建中止"; exit 1; }
+          dos2unix "$S" 2>/dev/null || true
+          bash "$S" "$BUILD_ROOT/openwrt"
+
       # 用 runner 预装的 Go/Rust 替代源码编译（prebuilt_host=true）。
       # 必须在 defconfig 之前 —— 脚本写进 .config 的项要由 defconfig 展开。
       # 全部软失败：ponwrt 不支持时只 warning，退回源码编译。
