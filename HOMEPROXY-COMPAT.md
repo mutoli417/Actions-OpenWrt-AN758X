@@ -39,7 +39,8 @@
 - `files/etc/uci-defaults/98-homeproxy-ipv6-off`：**可选**整机关 IPv6（默认不执行，开关 `disable_ipv6=1`）/ 过滤 AAAA / 关 LAN RA
 - `files/etc/uci-defaults/98-homeproxy-weekly-restart`：周重启 cron 注册（默认关）
 - `scripts/patch-homeproxy-local-ruleset.sh`：编译树源码层补丁（规则集本地化 / jail 挂载 / respawn）
-- `scripts/patch-homeproxy-v6hybrid.sh`：编译树源码层补丁（混合双栈：海外 v4-only + 非 CN v6 兜底阻断 + 境外 DNS 主备故障转移）
+- `scripts/patch-homeproxy-v6hybrid.sh`：编译树源码层补丁（混合双栈：海外 v4-only + 非 CN v6 兜底阻断 + 追加两台境外备用 DNS）
+- `scripts/patch-homeproxy-resolver-failover.sh`：编译树源码层补丁（出站节点域名解析冗余：直连备用 DNS + main-out 显式解析器 3s 超时 + 境外查询三路 evaluate/respond+race 并行）
 
 ## 默认策略：混合双栈（国内 v4+v6 直连，海外仅 v4）
 
@@ -51,10 +52,11 @@
    且不在 `geoip-cn` 规则集 → `block-out`。写死海外 v6 的 App / P2P 漏网时不会回落直连。
    必须用 `logical` 包裹：扁平规则里 `ip_version` 会被 `rule_set`/`invert` 匹配语义吞掉，
    实测会误杀 v4 海外地址。
-3. **境外 DNS 多级故障转移**：`config.dns.servers` 在 `main-dns`（TCP 8.8.8.8，detour
-   `main-out`）之后依次追加 `main-dns-alt`（TCP 1.1.1.1）、`main-dns-alt2`（TCP 8.8.4.4），
-   三项均 detour `main-out`、共用 `default-dns` 做域解析器；`final` 仍指向 `main-dns`，
-   sing-box 按服务器列表顺序逐级转移。用于缓解主上游经节点间歇 EOF / RST / deadline；
+3. **境外备用 DNS（配置层无逐级自动转移）**：`config.dns.servers` 在 `main-dns`（TCP 8.8.8.8，detour
+   `main-out`）之后追加 `main-dns-alt`（TCP 1.1.1.1）、`main-dns-alt2`（TCP 8.8.4.4），
+   三项均 detour `main-out`、共用 `default-dns` 做域解析器；`final` 仍指向 `main-dns`。
+   注意：sing-box 配置层**不做**按服务器顺序的自动逐级转移，这两台备用服务器默认不被
+   任何规则引用；它们由 `resolver-failover` 补丁的 evaluate/respond+race 规则显式接入并行兜底。
    备用项与主项同属代理隧道，不引入 DNS 泄漏。仅非 custom 的主节点 / bypass 分支生效
    （与 `main-dns` 同一段 `if (!isEmpty(main_node))`）。
 4. **锚点加固**：补丁脚本在 awk 写入后逐项 grep 三处 hunk 标记（`v6hybrid` A/B/C），
@@ -63,6 +65,31 @@
 兜底规则已经受海外 v6 真实流量验证：约 3 小时 soak + 40 连接并发压测，block-out 全 v6、
 v4 误杀 0、国内 v6 直连、PID 稳定。已知残留：写死 v6 的 App 仍靠 nft 旁路链兜底；
 UDP/QUIC v6 在 nft 层 reject，不走兜底；UDP v6 tproxy 计数器长期为 0。
+
+## 出站节点域名解析冗余（resolver-failover 补丁）
+
+针对主节点出站域名（如 `productandservice.infralinkplus.com`）在拨号前由
+`route.default_domain_resolver`（china-dns）解析、直连 DNS 间歇丢包时 lookup deadline
+连带 main-out 拨号失败的问题，生成器 `generate_client.uc` 注入三处加固：
+
+- **直连备用 DNS（Hunk A）**：`config.dns.servers` 追加 `direct-dns-alt`（TCP
+  119.29.29.29，detour direct-out）；TCP 经受 UDP 53 丢包的能力强于单 UDP 报文。
+- **出站显式解析器（Hunk B）**：main-out 的 wireguard 端点与普通出站显式挂
+  `domain_resolver` = `direct-dns-alt`，带 `timeout: 3s`（失败快速浮出便于重试）与
+  ipv4_only 策略；节点域名解析从 china-dns 关键路径剥离，请求域名的国内外分流仍走
+  `default_domain_resolver`，行为不变。
+- **境外查询并行兜底（Hunk C）**：proxy-domain 境外查询接 evaluate/respond+race 三路
+  并行（`main-dns` / `main-dns-alt` / `main-dns-alt2`），取首条 settled 有效响应；
+  三台备用服务器由 v6hybrid 补丁定义，本补丁只补规则引用。
+
+**配置边界（源码核实，sing-box 1.14.3 / master 一致）**：解析器仍是单 tag——
+`Server` 为标量字符串，无第二解析器、解析器组或自动接力字段；`Lookup` 出错即返回，
+不跨服务器重试；evaluate/respond 并行只覆盖规则驱动的入站查询，接不上出站内层解析。
+本补丁只能在单 tag 内叠加直连 TCP 上游、显式超时与规则级并行，配不出解析器级多上游切换。
+
+**依赖与退出码**：Hunk C 必须在 v6hybrid 补丁之后应用（缺 `main-dns-alt2` 直接硬失败）。
+脚本幂等；包整体缺失 warning 跳过 exit 0；锚点未命中 / awk 或 mv 失败 / 改写后无变化 /
+hunk 标记未落产物 → `::error::` 记录并 exit 1 中止构建。
 
 ## 可选：整机关 IPv6（与混合双栈互斥）
 
