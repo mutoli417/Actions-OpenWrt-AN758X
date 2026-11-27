@@ -41,6 +41,11 @@
 - `scripts/patch-homeproxy-local-ruleset.sh`：编译树源码层补丁（规则集本地化 / jail 挂载 / respawn）
 - `scripts/patch-homeproxy-v6hybrid.sh`：编译树源码层补丁（混合双栈：海外 v4-only + 非 CN v6 兜底阻断 + 追加两台境外备用 DNS）
 - `scripts/patch-homeproxy-resolver-failover.sh`：编译树源码层补丁（出站节点域名解析冗余：直连备用 DNS + main-out 显式解析器 3s 超时 + 境外查询三路 evaluate/respond+race 并行）
+- `scripts/patch-homeproxy-smartdns.sh`：编译树源码层补丁（B 方案：local-dns 5334 服务器 + main-out 解析器/dnsmasq 上游按开关条件切换）
+- `files/etc/config/smartdns`：B 方案 UCI 配置（默认 `enabled=0` 旁路关闭）
+- `files/etc/smartdns/custom.conf`：节点域名 cn 直连护栏 + 双栈对齐 / 陈旧缓存护栏
+- `files/sbin/smartdns-watchdog.sh`：5334 探活 / 状态记录 / 二级回滚（探活 cron 调用）
+- `files/etc/uci-defaults/99-smartdns`：探活 cron 注册、脚本执行位与目录兜底
 
 ## 默认策略：混合双栈（国内 v4+v6 直连，海外仅 v4）
 
@@ -117,3 +122,73 @@ uci commit homeproxy dhcp
 /etc/init.d/homeproxy restart
 /etc/init.d/dnsmasq restart
 ```
+
+## B 方案：SmartDNS 5334 统一递归引擎（默认旁路关闭，可选接入）
+
+在不替换 HomeProxy / sing-box 内核的前提下，把本地 SmartDNS 作为可选的多上游
+递归引擎接入。默认 `homeproxy.config.smartdns_enabled=0`，dnsmasq 上游仍指 5333
+main-dns race，运行行为与加固前一致；启用后才把引导解析与运行时查询切到 5334。
+
+### 架构与边界
+
+- SmartDNS 绑 `127.0.0.1:5334`（UDP+TCP，仅回环），不监听 53、不绑 LAN/WAN；
+  dnsmasq 仍占 53 承接 LAN 终端。`auto_set_dnsmasq=0`，不走上游包自带的 dnsmasq
+  改写 / 重启逻辑。
+- 分组：`cn`（223.5.5.5 / 119.29.29.29 / 116.116.116.116 直连国内公共 DNS）；
+  `en`（DoH 1.1.1.1 / dns.google，默认直连；socks5 `127.0.0.1:5330` 备用通道已在
+  `proxy_server` 声明，需挂备用通道时对应 server 段 `option use_proxy '1'`）。
+- 引导死锁护栏：节点域名 `productandservice.infralinkplus.com` 在 `custom.conf`
+  显式归 cn 直连组，绝不走经代理的上游；实测三台国内公共 DNS 均返回 155.254.101.x
+  健康中继池。
+- 包选择：feeds `smartdns` 主包（C 构建，依赖 libopenssl，无 aarch64 架构锁）；
+  `smartdns-ui` 子包（Rust/node 宿主构建）不编入。
+
+### 接线（编译期补丁 `patch-homeproxy-smartdns.sh`）
+
+- UC：追加 `local-dns`（UDP 127.0.0.1:5334，direct-out 绕行）；main-out 端点 /
+  出站 `domain_resolver` 按开关条件选择：开 → `local-dns`，关 → `direct-dns-alt`
+  （resolver-failover 补丁的直连备用 DNS）。
+- init.d/homeproxy：读取 `homeproxy.config.smartdns_enabled`；开关开时把 dnsmasq
+  注入的 `redirect-dns.conf` 上游由 `#5333` 改写为 `#5334`，关则原样保留。
+- 启动顺序：smartdns `START=19` 先于 homeproxy / sing-box `START=99`。
+
+### 启用 / 回滚
+
+启用：
+
+```sh
+uci set smartdns.@smartdns[0].enabled='1' && uci commit smartdns
+/etc/init.d/smartdns enable && /etc/init.d/smartdns start
+uci set homeproxy.config.smartdns_enabled='1' && uci commit homeproxy
+/etc/init.d/homeproxy restart
+```
+
+回滚（5334 故障一键退回 5333 race）：
+
+```sh
+uci set homeproxy.config.smartdns_enabled='0' && uci commit homeproxy
+/etc/init.d/homeproxy restart
+# 必要时停用 smartdns：/etc/init.d/smartdns stop && /etc/init.d/smartdns disable
+```
+
+### 探活与降级（阶段 2）
+
+- `files/sbin/smartdns-watchdog.sh`：cron 每 5 分钟探活（进程存活 + 回环 5334
+  UDP/TCP 端口在听），状态 `up/down/unknown` 与翻转时间、pid、uptime 写
+  `/tmp/smartdns-watchdog.state`，供监控增量基线采集。开机 120s 宽限期不计 down
+  （ignore-initial-down），避免启动瞬态误回滚。连续 3 次失败触发二级回滚：dnsmasq
+  上游指回 5333 并重启 dnsmasq，置 `rollback=1` 后不自动切回，待人工排查。
+- 一级降级（en 切备用上游 / 直连回退）：SmartDNS 组内并发剔除由进程内部完成；
+  本机无状态化事件钩子，本期不做上游自动联动（能力缺口见 enterprise 文档 §6 #7）。
+- 连接保持：urltest 组切换是否中断存量会话由 `interrupt_exist_connections` 控制，
+  生成器已从 UCI `urltest_interrupt_exist_connections` 读取；默认保持既有连接，
+  新连接走新选中节点。
+
+### 待 soak 验证 / 已知缺口
+
+- DoT 8.8.8.8:853 真机 TLS 握手与证书链未验证，本期未编入 en 组；待装包后实测。
+- 5334 单点故障影响面、两级缓存命中率、常驻 RSS/CPU、上游失败计数待上线 soak；
+  超预算动作顺序：先减 en 上游，再降 cache-size，仍超则回滚 B 方案。
+- 功能级 DNS 查询探测未接入（busybox nslookup 不支持 `-port`）；探活仅判进程 + 端口。
+- nftset 回填：当前 `bypass_mainland_china` 由 sing-box rule_set 分类，不依赖 dnsmasq
+  nftset；gfwlist / proxy 模式下的集合停更风险未在本机路由模式触发。
