@@ -15,11 +15,12 @@
 #     2. route.rules 注入 logical-and 兜底规则：ip_version=6 且不在
 #        geoip-cn 规则集 → block-out。必须用 logical 包裹：扁平规则里
 #        ip_version 会被 rule_set/invert 匹配语义吞掉，误杀 v4 连接。
-#     3. DNS 故障转移：在 main-dns（TCP 8.8.8.8，detour main-out）之后
+#     3. 追加两台境外备用 DNS：在 main-dns（TCP 8.8.8.8，detour main-out）之后
 #        依次追加 main-dns-alt（TCP 1.1.1.1）、main-dns-alt2（TCP 8.8.4.4），
-#        均同走 main-out、共用 default-dns 域解析器；final 仍指向 main-dns，
-#        sing-box 按服务器顺序在主备间逐级转移，缓解主上游经节点间歇
-#        EOF/RST/deadline。
+#        均同走 main-out、共用 default-dns 域解析器；final 仍指向 main-dns。
+#        注：sing-box 配置层不做按服务器顺序的自动逐级转移，备用服务器必须由
+#        规则显式引用；真正的并行兜底由 resolver-failover 补丁的
+#        evaluate/respond+race 提供，缓解主上游经节点间歇 EOF/RST/deadline。
 #
 #   退出码口径（硬失败，及早暴露上游重构 / 写入异常）：
 #     - 包整体缺失（find 无结果）：::warning:: 跳过，exit 0；
@@ -92,7 +93,7 @@ prev_defif && /^};$/ {
 /config\.dns\.final = 'main-dns';/ {
   print
   print ""
-  print "/* v6hybrid-dns-alt: backup overseas DNS over main-out; failover after main-dns */"
+  print "/* v6hybrid-dns-alt: standby overseas DNS over main-out; referenced by resolver-failover race rules */"
   print "push(config.dns.servers, {"
   print "\ttag: 'main-dns-alt',"
   print "\tdomain_resolver: {"
