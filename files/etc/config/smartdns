@@ -1,0 +1,67 @@
+# SmartDNS 本地多上游递归器（B 方案，5334 统一递归引擎）
+#
+# 默认 enabled='0'（旁路关闭）：dnsmasq 上游仍指 5333 main-dns race，本机行为
+#   与加固前一致。启用步骤（运行期，UCI）：
+#     uci set smartdns.@smartdns[0].enabled='1'
+#     uci commit smartdns
+#     /etc/init.d/smartdns enable
+#     /etc/init.d/smartdns start
+#     uci set homeproxy.config.smartdns_enabled='1'
+#     uci commit homeproxy
+#     /etc/init.d/homeproxy restart
+#
+# 边界：只绑回环 127.0.0.1:5334（UDP+TCP），不监听 53、不绑 LAN/WAN；
+#   auto_set_dnsmasq=0，不用上游包自带的 dnsmasq 改写/重启逻辑。
+
+config smartdns
+	option enabled '0'
+	option port '5334'
+	option ipv6_server '0'
+	option tcp_server '1'
+	option bind_device '1'
+	option bind_device_name 'lo'
+	option auto_set_dnsmasq '0'
+	option dualstack_ip_selection '0'
+	option resolve_local_hostnames '0'
+	option serve_expired '0'
+	option cache_size '2048'
+	option response_mode 'first-ping'
+	option speed_check_mode 'tcp:443,ping'
+	option log_level 'warn'
+	option proxy_server 'socks5://127.0.0.1:5330'
+
+# cn 组：国内公共 DNS 直连（就近解析，不挂代理上游）
+config server
+	option enabled '1'
+	option type 'udp'
+	option ip '223.5.5.5'
+	option server_group 'cn'
+
+config server
+	option enabled '1'
+	option type 'udp'
+	option ip '119.29.29.29'
+	option server_group 'cn'
+
+config server
+	option enabled '1'
+	option type 'tcp'
+	option ip '116.116.116.116'
+	option server_group 'cn'
+
+# en 组：加密境外上游，默认直连 DoH；socks5 备用通道已在 proxy_server 声明，
+#   需挂备用通道时把对应 server 段 option use_proxy '1'。
+#   注：DoT 8.8.8.8:853 因真机 TLS 握手/证书链未验证，本期不编入；待 soak 核实
+#   后再以 server 段 type 'tls' 补回。
+config server
+	option enabled '1'
+	option type 'https'
+	option ip 'https://1.1.1.1/dns-query'
+	option server_group 'en'
+
+config server
+	option enabled '1'
+	option type 'https'
+	option ip 'https://dns.google/dns-query'
+	option host_name 'dns.google'
+	option server_group 'en'
