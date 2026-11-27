@@ -1174,7 +1174,7 @@ fi
 # 8. 强制确保 HomeProxy 及其内核（防止被意外剔除，或被兜底禁用段回写 not set）
 echo "🔒 强制确保 HomeProxy 配置..."
 if [ -f ".config" ]; then
-  for pkg in luci-app-homeproxy luci-i18n-homeproxy-zh-cn sing-box; do
+  for pkg in luci-app-homeproxy luci-i18n-homeproxy-zh-cn sing-box smartdns; do
     sed -i "/^CONFIG_PACKAGE_${pkg}[= ]/d; /^# CONFIG_PACKAGE_${pkg} is not set/d" .config 2>/dev/null || true
     echo "CONFIG_PACKAGE_$pkg=y" >> .config || true
   done
