@@ -50,7 +50,9 @@ if [ -z "$UCS" ]; then
 fi
 
 for F in $UCS; do
-  if grep -q "resolver-failover" "$F" 2>/dev/null; then
+  # 幂等标记必须用本补丁 Hunk A 的独有注释串；裸 "resolver-failover" 会命中
+  # v6hybrid 备用 DNS 注释里的同名措辞，导致补丁被误判已应用而整段跳过。
+  if grep -q "resolver-failover: backup direct resolver" "$F" 2>/dev/null; then
     echo "  $F resolver-failover 补丁已存在，跳过"
     continue
   fi
