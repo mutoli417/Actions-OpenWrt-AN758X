@@ -77,7 +77,7 @@ for F in $UCS; do
   BEFORE=$(md5sum "$F" | cut -d' ' -f1)
 
   # 锚点命中计数：patch 后逐项校验，未命中显式报错，避免上游重构后静默漏打
-  hit_a=0; hit_b_ep=0; hit_b_ob=0; hit_c=0; hit_d=0
+  hit_a=0; hit_b_ep=0; hit_b_ob=0; hit_c=0; hit_d=0; hit_d2=0
 
   AWK_UC="$(mktemp)"
   cat > "$AWK_UC" <<'AWK'
@@ -252,7 +252,8 @@ AWK
   grep -q "config.endpoints\[length(config.endpoints)-1\].domain_resolver" "$F" && hit_b_ep=1
   grep -q "config.outbounds\[length(config.outbounds)-1\].domain_resolver" "$F" && hit_b_ob=1
   grep -q "resolver-failover: parallel overseas DNS race" "$F" && hit_c=1
-  grep -q "resolver-failover: non-CN final DNS race" "$F" && hit_d=1
+  grep -q "resolver-failover: non-CN final DNS three-leg race" "$F" && hit_d=1
+  grep -q "last-resort: all overseas legs failed" "$F" && hit_d2=1
 
   AFTER=$(md5sum "$F" | cut -d' ' -f1)
   if [ "$BEFORE" != "$AFTER" ]; then
@@ -267,8 +268,9 @@ AWK
   [ "$hit_b_ep" -ne 1 ] && { echo "::error::Hunk B1 (main-out endpoint domain_resolver) 未命中 $F"; RC=1; }
   [ "$hit_b_ob" -ne 1 ] && { echo "::error::Hunk B2 (main-out outbound domain_resolver) 未命中 $F"; RC=1; }
   [ "$hit_c" -ne 1 ]    && { echo "::error::Hunk C (evaluate/respond overseas DNS race) 未命中 $F"; RC=1; }
-  [ "$hit_d" -ne 1 ]    && { echo "::error::Hunk D (non-CN DNS race + china-dns fallback) 未命中 $F"; RC=1; }
-  if [ "$hit_a" -ne 1 ] || [ "$hit_b_ep" -ne 1 ] || [ "$hit_b_ob" -ne 1 ] || [ "$hit_c" -ne 1 ] || [ "$hit_d" -ne 1 ]; then
+  [ "$hit_d" -ne 1 ]    && { echo "::error::Hunk D (non-CN DNS race) 未命中 $F"; RC=1; }
+  [ "$hit_d2" -ne 1 ]   && { echo "::error::Hunk D (china-dns fallback route) 未命中 $F"; RC=1; }
+  if [ "$hit_a" -ne 1 ] || [ "$hit_b_ep" -ne 1 ] || [ "$hit_b_ob" -ne 1 ] || [ "$hit_c" -ne 1 ] || [ "$hit_d" -ne 1 ] || [ "$hit_d2" -ne 1 ]; then
     echo "::error::$F 存在未命中锚点，请核对上游 generate_client.uc 是否重构"
   fi
 done
