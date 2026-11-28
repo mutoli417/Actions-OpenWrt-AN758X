@@ -17,13 +17,14 @@
 #
 # 改动：
 #   Hunk A：config.dns 初始化块结束后追加备用直连 DNS direct-dns-alt
-#     （TCP 119.29.29.29，direct-out；TCP 经受 UDP 53 丢包的能力强于单 UDP 报文）。
+#     （UDP 223.5.5.5，direct-out；119.29.29.29 的 TCP53 在本 WAN 间歇 RST/stall，
+#      UDP 直连实测稳定，备用解析器改走 UDP 阿里 DNS）。
 #   Hunk B：给 main-out 的 endpoint / outbound 显式挂 domain_resolver =
 #     direct-dns-alt（带 timeout 3s，失败快速浮出便于重试），把节点域名解析从
 #     china-dns 关键路径上剥离；请求域名的国内/海外分流仍走
 #     default_domain_resolver，行为不变。
 #   注：配置层解析器仍是单 tag（源码 Server 为标量，无第二解析器/组/自动接力），
-#     本 hunk 只能在单 tag 内叠加显式超时与 TCP 传输，配不出多上游切换。
+#     本 hunk 只能在单 tag 内叠加显式超时与传输方式，配不出多上游切换。
 #   Hunk C：对 proxy-domain 境外查询接入 evaluate/respond+race 三路并行
 #     （main-dns / main-dns-alt / main-dns-alt2），取首条有效响应；三台备用
 #     服务器由 v6hybrid 补丁定义，本补丁只补规则引用。
@@ -82,11 +83,11 @@ for F in $UCS; do
 prev_dns && /^};$/ {
   print
   print ""
-  print "/* resolver-failover: backup direct resolver (TCP, rides out UDP 53 loss) for outbound node domain */"
+  print "/* resolver-failover: backup direct resolver (UDP 223.5.5.5; off flaky TCP 119.29:53) for outbound node domain */"
   print "push(config.dns.servers, {"
   print "\ttag: 'direct-dns-alt',"
-  print "\ttype: 'tcp',"
-  print "\tserver: '119.29.29.29',"
+  print "\ttype: 'udp',"
+  print "\tserver: '223.5.5.5',"
   print "\tdetour: self_mark ? 'direct-out' : null"
   print "});"
   prev_dns = 0
