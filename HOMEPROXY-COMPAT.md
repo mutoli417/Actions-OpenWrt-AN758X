@@ -77,8 +77,8 @@ UDP/QUIC v6 在 nft 层 reject，不走兜底；UDP v6 tproxy 计数器长期为
 `route.default_domain_resolver`（china-dns）解析、直连 DNS 间歇丢包时 lookup deadline
 连带 main-out 拨号失败的问题，生成器 `generate_client.uc` 注入三处加固：
 
-- **直连备用 DNS（Hunk A）**：`config.dns.servers` 追加 `direct-dns-alt`（TCP
-  119.29.29.29，detour direct-out）；TCP 经受 UDP 53 丢包的能力强于单 UDP 报文。
+- **直连备用 DNS（Hunk A）**：`config.dns.servers` 追加 `direct-dns-alt`（UDP
+  223.5.5.5，detour direct-out）；119.29.29.29 TCP53 在本 WAN 间歇 RST/stall，UDP 直连实测稳定。
 - **出站显式解析器（Hunk B）**：main-out 的 wireguard 端点与普通出站显式挂
   `domain_resolver` = `direct-dns-alt`，带 `timeout: 3s`（失败快速浮出便于重试）与
   ipv4_only 策略；节点域名解析从 china-dns 关键路径剥离，请求域名的国内外分流仍走
@@ -90,7 +90,7 @@ UDP/QUIC v6 在 nft 层 reject，不走兜底；UDP v6 tproxy 计数器长期为
 **配置边界（源码核实，sing-box 1.14.3 / master 一致）**：解析器仍是单 tag——
 `Server` 为标量字符串，无第二解析器、解析器组或自动接力字段；`Lookup` 出错即返回，
 不跨服务器重试；evaluate/respond 并行只覆盖规则驱动的入站查询，接不上出站内层解析。
-本补丁只能在单 tag 内叠加直连 TCP 上游、显式超时与规则级并行，配不出解析器级多上游切换。
+本补丁只能在单 tag 内叠加直连上游（UDP/TCP）、显式超时与规则级并行，配不出解析器级多上游切换。
 
 **依赖与退出码**：Hunk C 必须在 v6hybrid 补丁之后应用（缺 `main-dns-alt2` 直接硬失败）。
 脚本幂等；包整体缺失 warning 跳过 exit 0；锚点未命中 / awk 或 mv 失败 / 改写后无变化 /
