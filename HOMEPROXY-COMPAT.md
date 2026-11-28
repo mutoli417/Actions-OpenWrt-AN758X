@@ -32,6 +32,7 @@
 ## 本地文件落点（files/ 覆盖层 + scripts/ 补丁）
 
 - `files/etc/homeproxy/ruleset/*.srs`：编译期静态快照（geoip-cn / geosite-cn / geosite-noncn）
+- `files/etc/homeproxy/resources/direct_list.txt`：手动直连关键词清单（domain_keyword 命中即直连 + china-dns 解析）；内置偏国内 CDN/推送域名护栏（腾讯 ias、qpic、douyincdn、tdnsstic1、tdnsv6、alibabadns、dcloudstc），弥补 geosite 分类边界误判
 - `files/sbin/homeproxy-update-ruleset.sh`：规则集周更（双镜像 + 代理兜底 + SRS 魔数校验）
 - `files/sbin/homeproxy-weekly-restart.sh`：可选每周兜底重启
 - `files/etc/uci-defaults/96-dropbear-auth-key`：首启把内置 ed25519 **公钥**写入 `/etc/dropbear/authorized_keys`（刷机后免密 SSH 自动恢复；只含公钥，600 root:root，幂等追加）
@@ -40,7 +41,7 @@
 - `files/etc/uci-defaults/98-homeproxy-weekly-restart`：周重启 cron 注册（默认关）
 - `scripts/patch-homeproxy-local-ruleset.sh`：编译树源码层补丁（规则集本地化 / jail 挂载 / respawn）
 - `scripts/patch-homeproxy-v6hybrid.sh`：编译树源码层补丁（混合双栈：海外 v4-only + 非 CN v6 兜底阻断 + 追加两台境外备用 DNS）
-- `scripts/patch-homeproxy-resolver-failover.sh`：编译树源码层补丁（出站节点域名解析冗余：直连备用 DNS + main-out 显式解析器 3s 超时 + 境外查询三路 evaluate/respond+race 并行）
+- `scripts/patch-homeproxy-resolver-failover.sh`：编译树源码层补丁（出站节点域名解析冗余：直连备用 DNS + main-out 显式解析器 3s 超时 + proxy-domain 与 geosite-noncn 境外查询三路 evaluate/respond+race 并行 + 全败回落国内直连 UDP 兜底）
 - `scripts/patch-homeproxy-smartdns.sh`：编译树源码层补丁（B 方案：local-dns 5334 服务器 + main-out 解析器/dnsmasq 上游按开关条件切换）
 - `files/etc/config/smartdns`：B 方案 UCI 配置（默认 `enabled=0` 旁路关闭）
 - `files/etc/smartdns/custom.conf`：节点域名 cn 直连护栏 + 双栈对齐 / 陈旧缓存护栏
@@ -75,7 +76,7 @@ UDP/QUIC v6 在 nft 层 reject，不走兜底；UDP v6 tproxy 计数器长期为
 
 针对主节点出站域名（如 `productandservice.infralinkplus.com`）在拨号前由
 `route.default_domain_resolver`（china-dns）解析、直连 DNS 间歇丢包时 lookup deadline
-连带 main-out 拨号失败的问题，生成器 `generate_client.uc` 注入三处加固：
+连带 main-out 拨号失败的问题，生成器 `generate_client.uc` 注入四类加固：
 
 - **直连备用 DNS（Hunk A）**：`config.dns.servers` 追加 `direct-dns-alt`（UDP
   223.5.5.5，detour direct-out）；119.29.29.29 TCP53 在本 WAN 间歇 RST/stall，UDP 直连实测稳定。
@@ -86,13 +87,17 @@ UDP/QUIC v6 在 nft 层 reject，不走兜底；UDP v6 tproxy 计数器长期为
 - **境外查询并行兜底（Hunk C）**：proxy-domain 境外查询接 evaluate/respond+race 三路
   并行（`main-dns` / `main-dns-alt` / `main-dns-alt2`），取首条 settled 有效响应；
   三台备用服务器由 v6hybrid 补丁定义，本补丁只补规则引用。
+- **非 CN 最终查询 race + 国内直连兜底（Hunk D）**：`geosite-noncn` 最终境外查询同样接
+  三路 evaluate/respond+race；三路全败后再回落 `china-dns`（UDP 223.5.5.5 direct-out）
+  作兜底。兜底应答可能是国内优化/污染结果，仅在中继腿全挂时生效，正常由境外腿胜出；
+  被墙域名不要指望国内兜底拿到可用 IP。
 
 **配置边界（源码核实，sing-box 1.14.3 / master 一致）**：解析器仍是单 tag——
 `Server` 为标量字符串，无第二解析器、解析器组或自动接力字段；`Lookup` 出错即返回，
 不跨服务器重试；evaluate/respond 并行只覆盖规则驱动的入站查询，接不上出站内层解析。
 本补丁只能在单 tag 内叠加直连上游（UDP/TCP）、显式超时与规则级并行，配不出解析器级多上游切换。
 
-**依赖与退出码**：Hunk C 必须在 v6hybrid 补丁之后应用（缺 `main-dns-alt2` 直接硬失败）。
+**依赖与退出码**：Hunk C/D 必须在 v6hybrid 补丁之后应用（缺 `main-dns-alt2` 直接硬失败）。
 脚本幂等；包整体缺失 warning 跳过 exit 0；锚点未命中 / awk 或 mv 失败 / 改写后无变化 /
 hunk 标记未落产物 → `::error::` 记录并 exit 1 中止构建。
 
