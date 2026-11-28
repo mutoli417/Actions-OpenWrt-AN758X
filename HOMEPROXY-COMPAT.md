@@ -12,7 +12,9 @@
 2. 背景：homeproxy 的 `generate_client.uc` 生成的 DNS 配置仍使用 legacy 字段（address filter
    fields、`strategy` DNS rule action）。sing-box `1.14.0` 已标记弃用，**`1.16.0` 移除**。
    单独升 sing-box 到 1.16 而 homeproxy 未跟进，会出现配置解码失败、服务起不来（上游 issue
-   `#632` 同类版本错配）。
+   `#632` 同类版本错配）。本固件已由 `patch-homeproxy-dns-legacy-strategy.sh` 剥离两条国内
+   DNS 规则上的规则级 legacy `strategy`；服务器 `domain_resolver.strategy` 属新 schema
+   字段，保留不动。
 3. 升级后校验：
    - `sing-box check -c /var/run/homeproxy/sing-box-c.json`
    - `/etc/init.d/homeproxy status` 应为 `running`
@@ -42,6 +44,7 @@
 - `scripts/patch-homeproxy-local-ruleset.sh`：编译树源码层补丁（规则集本地化 / jail 挂载 / respawn）
 - `scripts/patch-homeproxy-v6hybrid.sh`：编译树源码层补丁（混合双栈：海外 v4-only + 非 CN v6 兜底阻断 + 追加两台境外备用 DNS）
 - `scripts/patch-homeproxy-resolver-failover.sh`：编译树源码层补丁（出站节点域名解析冗余：直连备用 DNS + main-out 显式解析器 3s 超时 + proxy-domain 与 geosite-noncn 境外查询三路 evaluate/respond+race 并行 + 全败回落国内直连 UDP 兜底）
+- `scripts/patch-homeproxy-dns-legacy-strategy.sh`：编译树源码层补丁（DNS schema 迁移：剥离 geosite-cn / 国内 v6 logical 两条规则上的规则级 legacy `strategy: prefer_ipv6`；prefer_ipv6 保留在 china-dns 服务器 `domain_resolver.strategy`，消除与 evaluate/respond+race 规则在 1.14.3 下的互斥硬校验失败）
 - `scripts/patch-homeproxy-smartdns.sh`：编译树源码层补丁（B 方案：local-dns 5334 服务器 + main-out 解析器/dnsmasq 上游按开关条件切换）
 - `files/etc/config/smartdns`：B 方案 UCI 配置（默认 `enabled=0` 旁路关闭）
 - `files/etc/smartdns/custom.conf`：节点域名 cn 直连护栏 + 双栈对齐 / 陈旧缓存护栏
@@ -52,8 +55,9 @@
 
 固件默认不整机关 IPv6，而是在生成器 `generate_client.uc` 打四处加固：
 
-1. **DNS 全局策略 `ipv4_only`**：海外 / 未匹配域名只返回 A 记录，压制 AAAA；国内两条
-   内置 DNS 规则显式 `prefer_ipv6`，按「规则 > 全局」优先级覆盖，国内域名保留 v4+v6。
+1. **DNS 全局策略 `ipv4_only`**：海外 / 未匹配域名只返回 A 记录，压制 AAAA；国内双栈由
+   china-dns 服务器 `domain_resolver.strategy: prefer_ipv6` 承载。规则级 legacy `strategy`
+   已由 dns-legacy-strategy 补丁剥离（新 schema 下规则动作不再携带 strategy 字段）。
 2. **v6 兜底阻断（失败闭合）**：`route.rules` 注入 `logical and` 规则——`ip_version=6`
    且不在 `geoip-cn` 规则集 → `block-out`。写死海外 v6 的 App / P2P 漏网时不会回落直连。
    必须用 `logical` 包裹：扁平规则里 `ip_version` 会被 `rule_set`/`invert` 匹配语义吞掉，
@@ -100,6 +104,25 @@ UDP/QUIC v6 在 nft 层 reject，不走兜底；UDP v6 tproxy 计数器长期为
 **依赖与退出码**：Hunk C/D 必须在 v6hybrid 补丁之后应用（缺 `main-dns-alt2` 直接硬失败）。
 脚本幂等；包整体缺失 warning 跳过 exit 0；锚点未命中 / awk 或 mv 失败 / 改写后无变化 /
 hunk 标记未落产物 → `::error::` 记录并 exit 1 中止构建。
+
+## DNS 规则级 legacy strategy 迁移（dns-legacy-strategy 补丁）
+
+**互斥根因**：resolver-failover 注入的 evaluate/respond、match_response，以及 SVCB/HTTPS
+`query_type [64,65]` 等新动作/条件会禁用 legacy DNS 模式；同一配置里再残留规则级
+`strategy: prefer_ipv6`（1.14 弃用、1.16 移除的 legacy 字段），sing-box 1.14.3
+`sing-box check` 直接硬拒绝，homeproxy 记 `wrong client configuration detected`，实例不起。
+
+**剥离范围**：`bypass_mainland_china` 分支两条国内 DNS 规则上的规则级 legacy strategy——
+`rule_set: 'geosite-cn'` → china-dns 规则；`type: 'logical'`（geosite-noncn invert +
+geoip-cn）国内 v6 规则。
+
+**行为保留**：`prefer_ipv6` 仍由 china-dns 服务器 `domain_resolver.strategy` 承载（新
+schema 字段，不在剥离范围），国内 v4+v6 双栈行为不变；全局 `ipv4_only` 压制海外 AAAA 不变。
+
+**校验口径**：补丁后规则级 `strategy: 'prefer_ipv6'` 残留 0，服务器级保留 1 处，迁移
+marker 计数 2；脚本幂等，上游已自行迁移时 warning 跳过；锚点未命中 / 剥离计数不符 →
+`::error::` 并 exit 1 中止构建。待 soak：新构建产物 `sing-box check` 通过、homeproxy
+`running`；真机复核在 SSH 通道恢复后进行。
 
 ## 可选：整机关 IPv6（与混合双栈互斥）
 

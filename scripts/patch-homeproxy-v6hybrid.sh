@@ -10,8 +10,10 @@
 #   配不出该策略；需在编译树源码层改 generate_client.uc。
 #
 #   三处改动：
-#     1. DNS 全局策略强制 ipv4_only：国内两条内置规则显式 prefer_ipv6
-#        覆盖全局，国内双栈保留；海外 / 未匹配域名只返回 A 记录。
+#     1. DNS 全局策略强制 ipv4_only：国内双栈由 china-dns 服务器
+#        domain_resolver.strategy=prefer_ipv6 承载；规则级 legacy strategy
+#        由 dns-legacy-strategy 补丁剥离（1.16 前必须完成的 schema 迁移）。
+#        海外 / 未匹配域名只返回 A 记录。
 #     2. route.rules 注入 logical-and 兜底规则：ip_version=6 且不在
 #        geoip-cn 规则集 → block-out。必须用 logical 包裹：扁平规则里
 #        ip_version 会被 rule_set/invert 匹配语义吞掉，误杀 v4 连接。
@@ -65,7 +67,7 @@ for F in $UCS; do
   cat > "$AWK_UC" <<'AWK'
 # Hunk A：全局 DNS 策略强制 ipv4_only
 /dns_default_strategy = \(ipv6_support !== '1'\) \? 'ipv4_only' : null;/ {
-  print "\tdns_default_strategy = 'ipv4_only'; /* v6hybrid: overseas v4-only; CN rules keep prefer_ipv6 */"
+  print "\tdns_default_strategy = 'ipv4_only'; /* v6hybrid: overseas v4-only; CN dual-stack kept via china-dns server domain_resolver */"
   next
 }
 
