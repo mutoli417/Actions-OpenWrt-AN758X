@@ -28,6 +28,9 @@
 #   Hunk C：对 proxy-domain 境外查询接入 evaluate/respond+race 三路并行
 #     （main-dns / main-dns-alt / main-dns-alt2），取首条有效响应；三台备用
 #     服务器由 v6hybrid 补丁定义，本补丁只补规则引用。
+#   Hunk D：对 geosite-noncn 最终境外查询同样接入三路 evaluate/respond+race；
+#     三路全败后再回落国内直连 UDP china-dns（223.5.5.5）作兜底。兜底应答
+#     可能是国内优化/污染结果，仅在中继腿全挂时生效，正常由境外腿胜出。
 #
 # 退出码口径（硬失败，同 v6hybrid）：
 #   包整体缺失：::warning:: 跳过，exit 0；已打补丁：幂等 exit 0；
@@ -74,7 +77,7 @@ for F in $UCS; do
   BEFORE=$(md5sum "$F" | cut -d' ' -f1)
 
   # 锚点命中计数：patch 后逐项校验，未命中显式报错，避免上游重构后静默漏打
-  hit_a=0; hit_b_ep=0; hit_b_ob=0; hit_c=0
+  hit_a=0; hit_b_ep=0; hit_b_ob=0; hit_c=0; hit_d=0
 
   AWK_UC="$(mktemp)"
   cat > "$AWK_UC" <<'AWK'
@@ -172,6 +175,61 @@ pending_race && /\}\);$/ {
   next
 }
 
+# Hunk D：geosite-noncn 最终境外查询三路 race，全败回落国内直连 UDP china-dns
+/rule_set: 'geosite-cn',?$/ { pending_g = 1; print; next }
+pending_g && /\}\);$/ {
+  print
+  print ""
+  print "\t\t/* resolver-failover: non-CN final DNS three-leg race (evaluate/respond+race); first valid response wins */"
+  print "\t\tpush(config.dns.rules, {"
+  print "\t\t\trule_set: 'geosite-noncn',"
+  print "\t\t\taction: 'evaluate',"
+  print "\t\t\tserver: 'main-dns',"
+  print "\t\t\ttag: 'odns-n1',"
+  print "\t\t\tspeculative: true"
+  print "\t\t});"
+  print "\t\tpush(config.dns.rules, {"
+  print "\t\t\trule_set: 'geosite-noncn',"
+  print "\t\t\taction: 'evaluate',"
+  print "\t\t\tserver: 'main-dns-alt',"
+  print "\t\t\ttag: 'odns-n2',"
+  print "\t\t\tspeculative: true"
+  print "\t\t});"
+  print "\t\tpush(config.dns.rules, {"
+  print "\t\t\trule_set: 'geosite-noncn',"
+  print "\t\t\taction: 'evaluate',"
+  print "\t\t\tserver: 'main-dns-alt2',"
+  print "\t\t\ttag: 'odns-n3',"
+  print "\t\t\tspeculative: true"
+  print "\t\t});"
+  print "\t\tpush(config.dns.rules, {"
+  print "\t\t\trule_set: 'geosite-noncn',"
+  print "\t\t\tmatch_response: 'odns-n1',"
+  print "\t\t\taction: 'respond',"
+  print "\t\t\trace: true"
+  print "\t\t});"
+  print "\t\tpush(config.dns.rules, {"
+  print "\t\t\trule_set: 'geosite-noncn',"
+  print "\t\t\tmatch_response: 'odns-n2',"
+  print "\t\t\taction: 'respond',"
+  print "\t\t\trace: true"
+  print "\t\t});"
+  print "\t\tpush(config.dns.rules, {"
+  print "\t\t\trule_set: 'geosite-noncn',"
+  print "\t\t\tmatch_response: 'odns-n3',"
+  print "\t\t\taction: 'respond',"
+  print "\t\t\trace: true"
+  print "\t\t});"
+  print "\t\t/* last-resort: all overseas legs failed -> direct UDP china-dns; answers may be CN-optimized */"
+  print "\t\tpush(config.dns.rules, {"
+  print "\t\t\trule_set: 'geosite-noncn',"
+  print "\t\t\taction: 'route',"
+  print "\t\t\tserver: 'china-dns'"
+  print "\t\t});"
+  pending_g = 0
+  next
+}
+
 { print }
 AWK
 
@@ -194,6 +252,7 @@ AWK
   grep -q "config.endpoints\[length(config.endpoints)-1\].domain_resolver" "$F" && hit_b_ep=1
   grep -q "config.outbounds\[length(config.outbounds)-1\].domain_resolver" "$F" && hit_b_ob=1
   grep -q "resolver-failover: parallel overseas DNS race" "$F" && hit_c=1
+  grep -q "resolver-failover: non-CN final DNS race" "$F" && hit_d=1
 
   AFTER=$(md5sum "$F" | cut -d' ' -f1)
   if [ "$BEFORE" != "$AFTER" ]; then
@@ -208,7 +267,8 @@ AWK
   [ "$hit_b_ep" -ne 1 ] && { echo "::error::Hunk B1 (main-out endpoint domain_resolver) 未命中 $F"; RC=1; }
   [ "$hit_b_ob" -ne 1 ] && { echo "::error::Hunk B2 (main-out outbound domain_resolver) 未命中 $F"; RC=1; }
   [ "$hit_c" -ne 1 ]    && { echo "::error::Hunk C (evaluate/respond overseas DNS race) 未命中 $F"; RC=1; }
-  if [ "$hit_a" -ne 1 ] || [ "$hit_b_ep" -ne 1 ] || [ "$hit_b_ob" -ne 1 ] || [ "$hit_c" -ne 1 ]; then
+  [ "$hit_d" -ne 1 ]    && { echo "::error::Hunk D (non-CN DNS race + china-dns fallback) 未命中 $F"; RC=1; }
+  if [ "$hit_a" -ne 1 ] || [ "$hit_b_ep" -ne 1 ] || [ "$hit_b_ob" -ne 1 ] || [ "$hit_c" -ne 1 ] || [ "$hit_d" -ne 1 ]; then
     echo "::error::$F 存在未命中锚点，请核对上游 generate_client.uc 是否重构"
   fi
 done
