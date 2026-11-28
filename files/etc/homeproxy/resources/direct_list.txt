@@ -1,0 +1,7 @@
+ias.tencent-cloud.net
+qpic.cn
+douyincdn.com
+tdnsstic1.cn
+tdnsv6.com
+alibabadns.com
+dcloudstc.com
