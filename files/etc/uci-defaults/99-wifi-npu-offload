@@ -1,0 +1,24 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# HG5585F 系列：固定 NPU/PPE + MT7916 WED 流表卸载与 Fullcone NAT 开关。
+# feed 侧 firewall4 默认值可能关闭硬件卸载；这里按参考镜像强制四项，幂等可重复执行。
+
+. /lib/functions.sh
+
+case "$(board_name)" in
+fiberhome,hg5585f-ct|\
+fiberhome,hg5585f-ct-usb-sfp|\
+fiberhome,hg5585f-cu|\
+fiberhome,hg5585f-cu-usb-sfp)
+	uci -q batch <<-EOF
+		set firewall.@defaults[0].flow_offloading='1'
+		set firewall.@defaults[0].flow_offloading_hw='1'
+		set firewall.@defaults[0].fullcone='1'
+		set firewall.@defaults[0].fullcone6='0'
+		commit firewall
+	EOF
+	;;
+esac
+
+exit 0
